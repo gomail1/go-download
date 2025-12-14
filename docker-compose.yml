@@ -1,0 +1,21 @@
+version: '3.8'
+
+services:
+  go-download-server:
+    image: ghcr.io/gomail1/go-download:latest
+    container_name: go-download-server
+    restart: unless-stopped
+    ports:
+      - "9980:9980"
+    volumes:
+      - /vol1/1000/docker/go-download/downloads:/app/downloads
+      - /vol1/1000/docker/go-download/pending:/app/pending
+      - /vol1/1000/docker/go-download/logs:/app/logs
+      - /vol1/1000/docker/go-download/config.json:/app/config.json
+    environment:
+      - TZ=Asia/Shanghai
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
