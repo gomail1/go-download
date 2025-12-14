@@ -1,8 +1,8 @@
 # 使用Go 1.21作为构建基础镜像
-FROM golang:1.21-alpine AS builder
+FROM golang:1.21 AS builder
 
 # 安装git
-RUN apk add --no-cache git
+RUN apt-get update && apt-get install -y git && apt-get clean
 
 # 设置工作目录
 WORKDIR /app
