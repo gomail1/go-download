@@ -2,7 +2,10 @@ version: '3.8'
 
 services:
   go-download-server:
+    # 选项1: 使用GitHub Container Registry镜像（推荐）
     image: ghcr.io/gomail1/go-download:latest
+    # 选项2: 使用Docker Hub镜像
+    # image: gomail1/go_downloader:latest
     container_name: go-download-server
     restart: unless-stopped
     ports:

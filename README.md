@@ -157,7 +157,7 @@ docker rm go-download
 
 ### 1. 配置文件说明
 
-飞牛系统推荐使用docker-compose进行部署，已创建好的`docker-compose.yml`文件配置了使用GitHub Container Registry的预构建镜像和持久化存储：
+飞牛系统推荐使用docker-compose进行部署，已创建好的`docker-compose.yml`文件提供了两种镜像源的配置选项（GitHub Container Registry和Docker Hub），您可以根据需要选择使用：
 
 ```bash
 cat docker-compose.yml
@@ -169,7 +169,10 @@ version: '3.8'
 
 services:
   go-download-server:
+    # 选项1: 使用GitHub Container Registry镜像（推荐）
     image: ghcr.io/gomail1/go-download:latest
+    # 选项2: 使用Docker Hub镜像
+    # image: gomail1/go_downloader:latest
     container_name: go-download-server
     restart: unless-stopped
     ports:
@@ -187,6 +190,12 @@ services:
         max-size: "10m"
         max-file: "3"
 ```
+
+**镜像源说明：**
+- **GitHub Container Registry**: `ghcr.io/gomail1/go-download:latest`
+- **Docker Hub**: `gomail1/go_downloader:latest`
+
+您可以根据网络环境和访问偏好选择其中一个镜像源，默认使用GitHub Container Registry镜像。
 
 ### 2. 启动服务
 
