@@ -38,7 +38,7 @@ go-download-server/
 └── README.md            # 项目说明文档
 ```
 
-## 安装和运行
+## GO语言直接部署
 
 ### 1. 安装依赖
 
@@ -113,7 +113,7 @@ go run main.go
 
 打开浏览器访问: `http://localhost:9980`
 
-## Docker部署
+## 常规部署方案
 
 ### 1. 构建Docker镜像
 
@@ -153,39 +153,78 @@ docker stop go-download
 docker rm go-download
 ```
 
-### 6. 推送到GitHub容器注册表（GHCR）
+## 飞牛专用部署方案
 
-#### 6.1 创建GitHub PAT
+### 1. 配置文件说明
 
-1. 登录GitHub，进入Settings > Developer settings > Personal access tokens
-2. 点击"Generate new token"，设置描述信息
-3. 选择权限：`write:packages`、`read:packages`、`repo`
-4. 生成并保存PAT（只显示一次）
-
-#### 6.2 登录GHCR
+飞牛系统推荐使用docker-compose进行部署，已创建好的`docker-compose.yml`文件配置了使用GitHub Container Registry的预构建镜像和持久化存储：
 
 ```bash
-docker login ghcr.io -u <your-github-username>
-# 输入刚才创建的PAT作为密码
+cat docker-compose.yml
 ```
 
-#### 6.3 标记镜像
+配置内容：
+```yaml
+version: '3.8'
+
+services:
+  go-download-server:
+    image: ghcr.io/gomail1/go-download:latest
+    container_name: go-download-server
+    restart: unless-stopped
+    ports:
+      - "9980:9980"
+    volumes:
+      - /vol1/1000/docker/go-download/downloads:/app/downloads
+      - /vol1/1000/docker/go-download/pending:/app/pending
+      - /vol1/1000/docker/go-download/logs:/app/logs
+      - /vol1/1000/docker/go-download/config.json:/app/config.json
+    environment:
+      - TZ=Asia/Shanghai
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+### 2. 启动服务
 
 ```bash
-docker tag go-download:latest ghcr.io/<your-github-username>/go-download:latest
+docker-compose up -d
 ```
 
-#### 6.4 推送镜像
+### 3. 查看容器状态
 
 ```bash
-docker push ghcr.io/<your-github-username>/go-download:latest
+docker-compose ps
 ```
 
-#### 6.5 从GHCR拉取镜像
+### 4. 查看日志
 
 ```bash
-docker pull ghcr.io/<your-github-username>/go-download:latest
+docker-compose logs -f
 ```
+
+### 5. 停止和删除容器
+
+```bash
+docker-compose down
+```
+
+### 6. 飞牛系统持久化配置
+
+飞牛系统中，所有数据将持久化存储在以下目录：
+
+```
+/vol1/1000/docker/go-download/
+├── downloads/    # 下载文件目录
+├── pending/      # 待处理文件目录
+├── logs/         # 日志文件目录
+└── config.json   # 配置文件
+```
+
+确保该目录权限设置正确，以便容器能够正常读写数据。
 
 ## 用户角色和权限
 
