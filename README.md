@@ -113,6 +113,80 @@ go run main.go
 
 打开浏览器访问: `http://localhost:9980`
 
+## Docker部署
+
+### 1. 构建Docker镜像
+
+```bash
+docker build -t go-download .
+```
+
+### 2. 运行Docker容器
+
+```bash
+docker run -d -p 9980:9980 --name go-download go-download:latest
+```
+
+### 3. 映射数据目录（可选）
+
+如果需要持久化存储下载文件、待审核文件和日志，可以映射数据目录：
+
+```bash
+docker run -d -p 9980:9980 \
+  -v ./downloads:/app/downloads \
+  -v ./pending:/app/pending \
+  -v ./logs:/app/logs \
+  -v ./config.json:/app/config.json \
+  --name go-download go-download:latest
+```
+
+### 4. 查看容器日志
+
+```bash
+docker logs go-download
+```
+
+### 5. 停止和删除容器
+
+```bash
+docker stop go-download
+docker rm go-download
+```
+
+### 6. 推送到GitHub容器注册表（GHCR）
+
+#### 6.1 创建GitHub PAT
+
+1. 登录GitHub，进入Settings > Developer settings > Personal access tokens
+2. 点击"Generate new token"，设置描述信息
+3. 选择权限：`write:packages`、`read:packages`、`repo`
+4. 生成并保存PAT（只显示一次）
+
+#### 6.2 登录GHCR
+
+```bash
+docker login ghcr.io -u <your-github-username>
+# 输入刚才创建的PAT作为密码
+```
+
+#### 6.3 标记镜像
+
+```bash
+docker tag go-download:latest ghcr.io/<your-github-username>/go-download:latest
+```
+
+#### 6.4 推送镜像
+
+```bash
+docker push ghcr.io/<your-github-username>/go-download:latest
+```
+
+#### 6.5 从GHCR拉取镜像
+
+```bash
+docker pull ghcr.io/<your-github-username>/go-download:latest
+```
+
 ## 用户角色和权限
 
 ### 1. 管理员 (admin)
