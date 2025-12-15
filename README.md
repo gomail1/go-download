@@ -196,8 +196,11 @@ services:
 
 注意事项：
 1：因拉取镜像时会把config.json文件创建成目录。这样需要自己新建一个config.json文件。
+
 2：飞牛系统中，所有数据将持久化存储在`/vol1/1000/docker/go-download/`目录下。
+
 3：Windows电脑可以新建一个TXT文本，将config.json文件内容复制到文本中，保存为config.json文件。（参考：示例配置文件内容）
+
 
 ### 2. 飞牛系统持久化配置
 
