@@ -195,6 +195,7 @@ services:
 您可以根据网络环境和访问偏好选择其中一个镜像源，默认使用Docker Hub镜像。
 
 注意事项：
+
 1：因拉取镜像时会把config.json文件创建成目录。这样需要自己新建一个config.json文件。
 
 2：飞牛系统中，所有数据将持久化存储在`/vol1/1000/docker/go-download/`目录下。
