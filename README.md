@@ -97,8 +97,8 @@ copy config.example.json config.json
 ```
 
 **注意事项：**
-- `config.json` 文件包含敏感的密码信息，不应上传到GitHub或其他公共代码仓库
-- `config.example.json` 文件是示例配置，不含真实密码，可以安全上传
+- `config.json` 文件包含敏感的密码信息，Hub提示风险，不建议上传到GitHub或其他公共代码仓库
+- `config.example.json` 文件是示例配置，不含真实密码，GitHub允许上传，用户需要根据示例创建自己的 `config.json` 文件
 - 用户管理功能会自动更新 `config.json` 文件
 
 ### 3. 运行服务器
@@ -169,10 +169,7 @@ version: '3.8'
 
 services:
   go-download-server:
-    # 选项1: 使用GitHub Container Registry镜像（推荐）
-    image: ghcr.io/gomail1/go-download:latest
-    # 选项2: 使用Docker Hub镜像
-    # image: gomail1/go_downloader:latest
+    image: gomail1/go_downloader:latest
     container_name: go-download-server
     restart: unless-stopped
     ports:
@@ -195,33 +192,14 @@ services:
 - **GitHub Container Registry**: `ghcr.io/gomail1/go-download:latest`
 - **Docker Hub**: `gomail1/go_downloader:latest`
 
-您可以根据网络环境和访问偏好选择其中一个镜像源，默认使用GitHub Container Registry镜像。
+您可以根据网络环境和访问偏好选择其中一个镜像源，默认使用Docker Hub镜像。
 
-### 2. 启动服务
+注意事项：
+1：因拉取镜像时会把config.json文件创建成目录。这样需要自己新建一个config.json文件。
+2：飞牛系统中，所有数据将持久化存储在`/vol1/1000/docker/go-download/`目录下。
+3：Windows电脑可以新建一个TXT文本，将config.json文件内容复制到文本中，保存为config.json文件。（参考：示例配置文件内容）
 
-```bash
-docker-compose up -d
-```
-
-### 3. 查看容器状态
-
-```bash
-docker-compose ps
-```
-
-### 4. 查看日志
-
-```bash
-docker-compose logs -f
-```
-
-### 5. 停止和删除容器
-
-```bash
-docker-compose down
-```
-
-### 6. 飞牛系统持久化配置
+### 2. 飞牛系统持久化配置
 
 飞牛系统中，所有数据将持久化存储在以下目录：
 
