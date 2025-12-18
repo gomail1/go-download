@@ -296,7 +296,6 @@ go run main.go
 
 ```yaml
 version: '3.8'
-
 services:
   go-download-server:
     # Docker Hub镜像
@@ -326,9 +325,12 @@ services:
 ### 注意事项
 
 - 配置文件将在首次运行时自动生成
-- 服务启动后可访问：`http://localhost:9980`
-- 所有数据将自动持久化到当前目录下的`downloads`、`pending`、`logs`和`config`目录
+- 服务启动后可访问：
+  - HTTP: `http://localhost:9980`
+  - HTTPS: `https://localhost:9443`
+- 所有数据将自动持久化到当前目录下的`downloads`、`pending`、`logs`、`config`和`ssl`目录
 - 如需修改端口或其他配置，可直接编辑`docker-compose.yml`文件后重启服务
+- SSL证书放置在`ssl`目录下，如证书不存在，HTTPS服务将无法启动
 
 
 ## 飞牛专用部署方案
