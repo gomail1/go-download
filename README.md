@@ -350,6 +350,7 @@ services:
       - /vol1/1000/docker/go-download/pending:/app/pending
       - /vol1/1000/docker/go-download/logs:/app/logs
       - /vol1/1000/docker/go-download/config:/app/config
+      - /vol1/1000/docker/go-download/ssl:/app/ssl
     environment:
       - TZ=Asia/Shanghai
     logging:
@@ -378,8 +379,9 @@ services:
 ├── downloads/    # 下载文件目录
 ├── pending/      # 待处理文件目录
 ├── logs/         # 日志文件目录
-└── config/       # 配置目录
-    └── config.json   # 配置文件
+├── config/       # 配置目录
+│   └── config.json   # 配置文件
+└── ssl/          # SSL证书目录
 ```
 
 确保该目录权限设置正确，以便容器能够正常读写数据。

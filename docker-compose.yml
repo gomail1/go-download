@@ -14,7 +14,8 @@ services:
       - /vol1/1000/docker/go-download/downloads:/app/downloads
       - /vol1/1000/docker/go-download/pending:/app/pending
       - /vol1/1000/docker/go-download/logs:/app/logs
-      - /vol1/1000/docker/go-download/config.json:/app/config.json
+      - /vol1/1000/docker/go-download/config:/app/config
+      - /vol1/1000/docker/go-download/ssl:/app/ssl
     environment:
       - TZ=Asia/Shanghai
     logging:

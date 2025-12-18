@@ -38,4 +38,4 @@ RUN chmod +x start.sh
 EXPOSE 9980 9443
 
 # 启动应用程序
-CMD ["./start.sh"]
+CMD ["./go-download-server"]
