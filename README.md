@@ -307,11 +307,13 @@ services:
     restart: unless-stopped
     ports:
       - "9980:9980"
+      - "9443:9443"
     volumes:
       - ./downloads:/app/downloads
       - ./pending:/app/pending
       - ./logs:/app/logs
       - ./config:/app/config
+      - ./ssl:/app/ssl
     environment:
       - TZ=Asia/Shanghai
     logging:
@@ -345,6 +347,7 @@ services:
     restart: unless-stopped
     ports:
       - "9980:9980"
+      - "9443:9443"
     volumes:
       - /vol1/1000/docker/go-download/downloads:/app/downloads
       - /vol1/1000/docker/go-download/pending:/app/pending

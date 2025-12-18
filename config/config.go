@@ -138,15 +138,16 @@ func LoadConfig() error {
 
 // 保存配置文件
 func SaveConfig() error {
-	// 确保config目录存在
-	if err := os.MkdirAll("config", 0755); err != nil {
-		return fmt.Errorf("无法创建config目录: %w", err)
-	}
-
 	// 首先尝试保存到当前工作目录
 	currentDir, err := os.Getwd()
 	if err == nil {
-		configPath := filepath.Join(currentDir, "config/config.json")
+		configDir := filepath.Join(currentDir, "config")
+		// 确保当前工作目录下的config目录存在
+		if err := os.MkdirAll(configDir, 0755); err != nil {
+			return fmt.Errorf("无法创建当前工作目录的config目录: %w", err)
+		}
+
+		configPath := filepath.Join(configDir, "config.json")
 		file, err := os.Create(configPath)
 		if err == nil {
 			defer file.Close()
@@ -160,7 +161,14 @@ func SaveConfig() error {
 	}
 
 	// 如果当前工作目录保存失败，尝试保存到执行目录
-	configPath := filepath.Join(GetExecDir(), "config/config.json")
+	execDir := GetExecDir()
+	configDir := filepath.Join(execDir, "config")
+	// 确保执行目录下的config目录存在
+	if err := os.MkdirAll(configDir, 0755); err != nil {
+		return fmt.Errorf("无法创建执行目录的config目录: %w", err)
+	}
+
+	configPath := filepath.Join(configDir, "config.json")
 	file, err := os.Create(configPath)
 	if err != nil {
 		return fmt.Errorf("无法创建配置文件: %w", err)
