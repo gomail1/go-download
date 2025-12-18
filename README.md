@@ -1,6 +1,6 @@
 # Go HTTP服务器下载站-v0.0.2 gomail1  
 
-一个使用Go语言开发的高性能文件下载站，提供文件上传、下载、浏览、审核和管理功能，支持基于角色的用户权限控制。
+使用Go语言开发的高性能文件下载站，提供文件上传、下载、浏览、审核和管理功能，支持基于角色的用户权限控制。
 
 **GitHub仓库链接**: [https://github.com/gomail1/go-download](https://github.com/gomail1/go-download)
 **Docker仓库链接**: [https://hub.docker.com/r/gomail1/go_downloader](https://hub.docker.com/r/gomail1/go_downloader)
@@ -131,7 +131,6 @@ go-download-server/
 ├── config/              # 配置相关
 │   ├── config.go        # 配置管理代码
 │   └── config.json      # 配置文件
-├── config.example.json  # 配置文件示例（不含真实密码）
 ├── constants/           # 常量定义
 │   └── constants.go     # 常量定义文件
 ├── session/             # 会话管理
@@ -169,21 +168,7 @@ go mod tidy
 
 ### 2. 配置文件
 
-在运行前，您可以根据示例配置文件创建 `config.json` 文件，或者让服务器在首次运行时自动生成。
-
-#### 从示例配置文件创建
-
-```bash
-# Linux/Mac
-mkdir -p config
-cp config.example.json config/config.json
-
-# Windows
-mkdir config 2>nul
-copy config.example.json config\config.json
-```
-
-示例配置文件 `config.example.json` 包含安全的默认配置模板，不含真实密码。
+服务器会在首次运行时自动生成配置文件 `config/config.json`，无需手动创建。
 
 #### 自动生成配置
 
@@ -196,9 +181,7 @@ copy config.example.json config\config.json
 如果出现错误请按照以下**完整配置结构：**进行修改。
 
 **注意事项：**
-- `config.json` 文件包含敏感的密码信息，不建议上传到GitHub或其他公共代码仓库
-- `config.example.json` 文件是示例配置，不含真实密码，可安全上传到GitHub
-- 用户管理功能会自动更新 `config.json` 文件
+- 用户管理功能会自动更新 `config/config.json` 文件
 
 **完整配置结构：**
 
