@@ -25,12 +25,11 @@ WORKDIR /app
 # 复制构建好的应用程序
 COPY --from=builder /app/go-download-server ./
 
-# 复制配置文件和启动脚本
+# 复制启动脚本
 COPY start.sh ./
-COPY config.example.json ./config/config.example.json
 
 # 创建必要的目录
-RUN mkdir -p downloads pending logs ssl
+RUN mkdir -p config downloads pending logs ssl
 
 # 设置可执行权限
 RUN chmod +x start.sh
