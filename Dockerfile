@@ -1,45 +1,42 @@
-# 第一阶段：构建Go应用
+# 使用官方Go镜像作为构建环境
 FROM golang:1.21-alpine AS builder
 
 # 设置工作目录
 WORKDIR /app
 
-# 复制go.mod文件
-COPY go.mod .
+# 复制go.mod和go.sum文件
+COPY go.mod go.sum ./
 
 # 下载依赖
-RUN go mod download
+RUN go mod tidy
 
 # 复制源代码
-COPY main.go .
+COPY . .
 
-# 构建应用
-RUN CGO_ENABLED=0 GOOS=linux go build -o go-download-server main.go
+# 构建应用程序
+RUN go build -o go-download-server ./
 
-# 第二阶段：创建最终镜像
+# 使用轻量级镜像作为运行环境
 FROM alpine:latest
 
 # 设置工作目录
 WORKDIR /app
 
-# 安装必要的依赖
-RUN apk --no-cache add ca-certificates tzdata
+# 复制构建好的应用程序
+COPY --from=builder /app/go-download-server ./
 
-# 创建所需目录
-RUN mkdir -p /app/downloads /app/pending /app/logs
+# 复制配置文件和启动脚本
+COPY start.sh ./
+COPY config.example.json ./config/config.example.json
 
-# 从构建阶段复制应用程序
-COPY --from=builder /app/go-download-server .
+# 创建必要的目录
+RUN mkdir -p downloads pending logs ssl
 
-# 复制配置文件
-COPY config.example.json /app/config.example.json
-COPY config.json /app/config.json
-
-# 设置环境变量
-ENV TZ=Asia/Shanghai
+# 设置可执行权限
+RUN chmod +x start.sh
 
 # 暴露端口
-EXPOSE 9980
+EXPOSE 9980 9443
 
-# 运行应用
-CMD ["./go-download-server"]
+# 启动应用程序
+CMD ["./start.sh"]
