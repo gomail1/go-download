@@ -342,7 +342,7 @@ services:
 
 - 配置文件将在首次运行时自动生成
 - 服务启动后可访问：`http://localhost:9980`
-- 所有数据将自动持久化到当前目录下的`downloads`、`pending`和`logs`目录
+- 所有数据将自动持久化到当前目录下的`downloads`、`pending`、`logs`和`config`目录
 - 如需修改端口或其他配置，可直接编辑`docker-compose.yml`文件后重启服务
 
 
