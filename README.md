@@ -272,6 +272,54 @@ services:
 
 确保该目录权限设置正确，以便容器能够正常读写数据。
 
+## 1panel部署方案
+
+### 1. 配置文件说明
+
+1panel推荐使用docker-compose进行部署，已创建好的`docker-compose.yml`文件提供了两种镜像源的配置选项（GitHub Container Registry和Docker Hub），您可以根据需要选择使用：
+配置内容：
+
+```yaml
+version: '3.8' 
+ services: 
+   go-download-server: 
+     # Docker Hub镜像 
+     image: gomail1/go_downloader:latest 
+     # 备选镜像源：GitHub Container Registry 
+     # image: ghcr.io/gomail1/go-download:latest 
+     container_name: go-download-server 
+     restart: unless-stopped 
+     ports: 
+       - "9980:9980" 
+       - "1443:1443" 
+     volumes: 
+       - ./downloads:/app/downloads 
+       - ./pending:/app/pending 
+       - ./logs:/app/logs 
+       - ./config:/app/config 
+       - ./ssl:/app/ssl 
+     environment: 
+        TZ: Asia/Shanghai 
+     logging: 
+       driver: json-file 
+       options: 
+         max-size: "10m" 
+         max-file: "3" 
+```
+
+**镜像源说明：**
+- **GitHub Container Registry**: [ghcr.io/gomail1/go-download:latest](https://github.com/gomail1/go-download/pkgs/container/go-download)
+- **Docker Hub**: [gomail1/go_downloader:latest](https://hub.docker.com/r/gomail1/go_downloader)
+
+您可以根据网络环境和访问偏好选择其中一个镜像源，默认使用Docker Hub镜像。
+
+注意事项：
+1：1panel系统中，所有数据将持久化存储在当前目录下的downloads、pending、logs、config和ssl目录。
+2：配置文件将在首次运行时自动生成。
+3：服务启动后可访问：
+   - HTTP: `http://localhost:9980`
+   - HTTPS: `https://localhost:1443`
+
 ## 用户角色和权限
 
 ### 1. 管理员 (admin)
