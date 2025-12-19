@@ -11,7 +11,7 @@ const (
 	// 飞牛系统部署路径配置
 	ServerName = "Go 下载站"
 	// 版本信息
-	Version   = "v0.0.2"
+	Version   = "v0.0.3"
 	Developer = "gomail1"
 	// HTTPS证书默认路径
 	DefaultCertFile = "./ssl/cert.pem"
