@@ -465,7 +465,7 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 						<p>或</p>
 						<label class="file-label">
 							<input type="file" id="file" name="file" multiple required>
-							<span class="btn btn-primary">选择文件/文件夹</span>
+							<span class="btn btn-primary">选择文件</span>
 						</label>
 						<p class="drop-hint">支持选择多个文件或整个文件夹</p>
 					</div>
@@ -550,20 +550,6 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 				dropArea.classList.remove('drag-over');
 			}
 
-			// 处理文件放置
-			dropArea.addEventListener('drop', handleDrop, false);
-
-			function handleDrop(e) {
-				const dt = e.dataTransfer;
-				const files = dt.files;
-				handleFiles(files);
-			}
-
-			// 处理文件选择
-			fileInput.addEventListener('change', function() {
-				handleFiles(this.files);
-			});
-
 			// 格式化文件大小
 			function formatFileSize(bytes) {
 				if (bytes === 0) return '0 Bytes';
@@ -577,9 +563,16 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 			function isFileExists(file) {
 				for (let i = 0; i < selectedFiles.length; i++) {
 					const existingFile = selectedFiles[i];
-					// 检查文件名和大小是否相同
-					if (existingFile.name === file.name && existingFile.size === file.size) {
-						return true;
+					// 对于带有相对路径的文件，使用相对路径和大小进行比较
+					if (file.webkitRelativePath && existingFile.webkitRelativePath) {
+						if (existingFile.webkitRelativePath === file.webkitRelativePath && existingFile.size === file.size) {
+							return true;
+						}
+					} else {
+						// 对于普通文件，使用文件名和大小进行比较
+						if (existingFile.name === file.name && existingFile.size === file.size) {
+							return true;
+						}
 					}
 				}
 				return false;
@@ -655,11 +648,119 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 				fileInput.files = dataTransfer.files;
 			}
 
-			// 递归处理文件和文件夹（追加模式）
-			async function handleFiles(files) {
+			// 递归读取文件系统句柄（文件或文件夹）
+			async function readFileSystemHandle(handle, path = '') {
+				if (handle.kind === 'file') {
+					// 读取文件
+					const file = await handle.getFile();
+					// 添加相对路径信息
+					file.webkitRelativePath = path + file.name;
+					// 检查文件是否已存在，避免重复添加
+					if (!isFileExists(file)) {
+						selectedFiles.push(file);
+					}
+				} else if (handle.kind === 'directory') {
+					// 读取文件夹
+					const entries = await handle.values();
+					for await (const entry of entries) {
+						await readFileSystemHandle(entry, path + handle.name + '/');
+					}
+				}
+			}
+
+			// 处理DataTransferItemList中的所有项
+			async function processDataTransferItems(items) {
+				for (let i = 0; i < items.length; i++) {
+					const item = items[i];
+					if (item.kind === 'file') {
+						// 首先检查是否为文件夹
+						const entry = item.webkitGetAsEntry();
+						if (entry && entry.isDirectory) {
+							// 如果是文件夹，递归读取内容
+							await readDirectoryEntry(entry, '');
+						} else if (entry && entry.isFile) {
+							// 如果是文件，读取文件内容
+							entry.file(function(file) {
+								// 添加相对路径信息
+								file.webkitRelativePath = entry.fullPath.substring(1); // 移除开头的斜杠
+								// 检查文件是否已存在，避免重复添加
+								if (!isFileExists(file)) {
+									selectedFiles.push(file);
+								}
+							});
+						} else {
+							// 对于不支持webkitGetAsEntry的浏览器，使用getAsFile()
+							const file = item.getAsFile();
+							if (file) {
+								// 检查文件大小是否大于0，避免添加文件夹本身
+								if (file.size > 0) {
+									// 检查文件是否已存在，避免重复添加
+									if (!isFileExists(file)) {
+										selectedFiles.push(file);
+									}
+								} else {
+									// 尝试使用FileSystemHandle API读取文件夹内容
+									try {
+										const handle = await item.getAsFileSystemHandle();
+										if (handle) {
+											await readFileSystemHandle(handle, '');
+										}
+									} catch (err) {
+										console.error('Error reading file system handle:', err);
+									}
+								}
+							}
+						}
+					}
+				}
+				// 显示更新后的文件列表
+				displayFileList();
+			}
+
+			// 使用FileEntry API递归读取文件夹内容（兼容更多浏览器）
+			async function readDirectoryEntry(entry, path = '') {
+				return new Promise((resolve) => {
+					if (entry.isFile) {
+						// 读取文件
+						entry.file(function(file) {
+							// 添加相对路径信息
+							file.webkitRelativePath = path + entry.name;
+							// 检查文件是否已存在，避免重复添加
+							if (!isFileExists(file)) {
+								selectedFiles.push(file);
+							}
+							resolve();
+						});
+					} else if (entry.isDirectory) {
+						// 读取文件夹
+						const reader = entry.createReader();
+						reader.readEntries(async function(entries) {
+							// 创建一个Promise数组，等待所有子项处理完成
+							const promises = [];
+							for (let i = 0; i < entries.length; i++) {
+								promises.push(readDirectoryEntry(entries[i], path + entry.name + '/'));
+							}
+							// 等待所有子项处理完成
+							await Promise.all(promises);
+							resolve();
+						});
+					} else {
+						resolve();
+					}
+				});
+			}
+
+			// 处理文件放置
+			dropArea.addEventListener('drop', async function(e) {
+				const items = e.dataTransfer.items;
+				await processDataTransferItems(items);
+			}, false);
+
+			// 处理文件选择
+			fileInput.addEventListener('change', function() {
 				// 遍历新选择的文件，追加到现有列表中
-				for (let i = 0; i < files.length; i++) {
-					const file = files[i];
+				for (let i = 0; i < this.files.length; i++) {
+					const file = this.files[i];
 					// 检查文件是否已存在，避免重复添加
 					if (!isFileExists(file)) {
 						selectedFiles.push(file);
@@ -667,7 +768,9 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 				}
 				// 显示更新后的文件列表
 				displayFileList();
-			}
+			});
+
+
 
 			// 上传文件
 			uploadBtn.addEventListener('click', function() {

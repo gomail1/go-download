@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"os"
@@ -63,9 +64,44 @@ func ApproveHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 移动文件
 	if err := os.Rename(sourcePath, destPath); err != nil {
-		utils.Log(utils.LogLevelError, sess.Username, "admin", "approve_file", fmt.Sprintf("移动文件失败: %v", err))
-		http.Redirect(w, r, fmt.Sprintf("/review?path=%s&msg=%s&type=error", url.QueryEscape(currentPath), url.QueryEscape("审核通过失败")), http.StatusFound)
-		return
+		// 如果是跨设备移动失败，使用复制+删除的方式
+		if strings.Contains(err.Error(), "invalid cross-device link") {
+			// 打开源文件
+			srcFile, err := os.Open(sourcePath)
+			if err != nil {
+				utils.Log(utils.LogLevelError, sess.Username, "admin", "approve_file", fmt.Sprintf("打开源文件失败: %v", err))
+				http.Redirect(w, r, fmt.Sprintf("/review?path=%s&msg=%s&type=error", url.QueryEscape(currentPath), url.QueryEscape("审核通过失败")), http.StatusFound)
+				return
+			}
+			defer srcFile.Close()
+
+			// 创建目标文件
+			dstFile, err := os.Create(destPath)
+			if err != nil {
+				utils.Log(utils.LogLevelError, sess.Username, "admin", "approve_file", fmt.Sprintf("创建目标文件失败: %v", err))
+				http.Redirect(w, r, fmt.Sprintf("/review?path=%s&msg=%s&type=error", url.QueryEscape(currentPath), url.QueryEscape("审核通过失败")), http.StatusFound)
+				return
+			}
+			defer dstFile.Close()
+
+			// 复制文件内容
+			if _, err := io.Copy(dstFile, srcFile); err != nil {
+				utils.Log(utils.LogLevelError, sess.Username, "admin", "approve_file", fmt.Sprintf("复制文件内容失败: %v", err))
+				http.Redirect(w, r, fmt.Sprintf("/review?path=%s&msg=%s&type=error", url.QueryEscape(currentPath), url.QueryEscape("审核通过失败")), http.StatusFound)
+				return
+			}
+
+			// 删除源文件
+			if err := os.Remove(sourcePath); err != nil {
+				utils.Log(utils.LogLevelError, sess.Username, "admin", "approve_file", fmt.Sprintf("删除源文件失败: %v", err))
+				// 这里不返回错误，因为文件已经成功复制到目标位置
+			}
+		} else {
+			// 其他错误直接返回
+			utils.Log(utils.LogLevelError, sess.Username, "admin", "approve_file", fmt.Sprintf("移动文件失败: %v", err))
+			http.Redirect(w, r, fmt.Sprintf("/review?path=%s&msg=%s&type=error", url.QueryEscape(currentPath), url.QueryEscape("审核通过失败")), http.StatusFound)
+			return
+		}
 	}
 
 	// 记录日志
