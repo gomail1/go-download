@@ -1,0 +1,25 @@
+version: '3.8'
+services:
+  go-download-server:
+    # Docker Hub镜像
+    image: gomail1/go_downloader:latest
+    # 备选镜像源：GitHub Container Registry
+    # image: ghcr.io/gomail1/go-download:latest
+    container_name: go-download-server
+    restart: unless-stopped
+    ports:
+      - "9980:9980"
+      - "1443:1443"
+    volumes:
+      - ./downloads:/app/downloads
+      - ./pending:/app/pending
+      - ./logs:/app/logs
+      - ./config:/app/config
+      - ./ssl:/app/ssl
+    environment:
+      - TZ=Asia/Shanghai
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
