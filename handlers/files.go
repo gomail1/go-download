@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -225,6 +226,20 @@ func FilesHandler(w http.ResponseWriter, r *http.Request) {
 		.btn-danger:hover {
 			background-color: #da190b;
 		}
+		.btn-info {
+			background-color: #2196F3;
+			color: white;
+		}
+		.btn-info:hover {
+			background-color: #0b7dda;
+		}
+		.btn-success {
+			background-color: #4CAF50;
+			color: white;
+		}
+		.btn-success:hover {
+			background-color: #45a049;
+		}
 		.empty-message {
 			text-align: center;
 			padding: 60px 20px;
@@ -333,6 +348,184 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 	// 获取当前用户
 	sess := session.GetCurrentUser(r)
 
+	// 为管理员添加批量操作按钮
+	var batchActions string
+	if sess != nil && sess.Role == constants.RoleAdmin {
+		// 获取所有目录列表，用于目标路径选择
+		dirList := utils.GetDirectoryList(config.AppConfig.Server.DownloadDir)
+
+		// 构建目录选择下拉框
+		selectHTML := `<select id="target-path" style="padding: 8px; margin-right: 10px; border-radius: 3px; border: 1px solid #ddd;">`
+		for _, dir := range dirList {
+			displayName := dir
+			if dir == "." {
+				displayName = "根目录"
+			}
+			selectHTML += fmt.Sprintf(`<option value="%s">%s</option>`, url.QueryEscape(dir), displayName)
+		}
+		selectHTML += `</select>`
+
+		batchActions = fmt.Sprintf(`<div class="batch-actions" style="margin-bottom: 20px;">
+				<h3>批量操作</h3>
+				<div style="display: flex; gap: 10px; align-items: center;">
+					<button type="button" id="select-all" class="btn btn-info">全选</button>
+					<button type="button" id="select-none" class="btn btn-info">取消全选</button>
+					<button type="button" id="batch-delete" class="btn btn-danger">删除</button>
+					<button type="button" id="batch-move" class="btn btn-primary">移动</button>
+					<button type="button" id="batch-copy" class="btn btn-secondary">复制</button>
+					<div style="display: none; margin-left: 10px;" id="move-copy-form">
+						` + selectHTML + `
+						<button type="button" id="confirm-action" class="btn btn-success">确认</button>
+						<button type="button" id="cancel-action" class="btn btn-danger">取消</button>
+					</div>
+				</div>
+			</div>`)
+	}
+
+	// 添加批量操作脚本
+	var batchScript string
+	if sess != nil && sess.Role == constants.RoleAdmin {
+		batchScript = `<script>
+				// 批量操作脚本
+		document.addEventListener('DOMContentLoaded', function() {
+			const batchDeleteBtn = document.getElementById('batch-delete');
+			const batchMoveBtn = document.getElementById('batch-move');
+			const batchCopyBtn = document.getElementById('batch-copy');
+			const selectAllBtn = document.getElementById('select-all');
+			const selectNoneBtn = document.getElementById('select-none');
+			const moveCopyForm = document.getElementById('move-copy-form');
+			const confirmBtn = document.getElementById('confirm-action');
+			const cancelBtn = document.getElementById('cancel-action');
+			let currentAction = '';
+
+			// 全选功能
+			selectAllBtn.addEventListener('click', function() {
+				const checkboxes = document.querySelectorAll('input[name="selected-files"]');
+				checkboxes.forEach(cb => {
+					cb.checked = true;
+				});
+			});
+
+			// 取消全选功能
+			selectNoneBtn.addEventListener('click', function() {
+				const checkboxes = document.querySelectorAll('input[name="selected-files"]');
+				checkboxes.forEach(cb => {
+					cb.checked = false;
+				});
+			});
+
+			// 显示移动/复制表单
+			function showMoveCopyForm(action) {
+				currentAction = action;
+				moveCopyForm.style.display = 'flex';
+			}
+
+			// 隐藏移动/复制表单
+			function hideMoveCopyForm() {
+				moveCopyForm.style.display = 'none';
+				currentAction = '';
+				// 清空输入框
+				document.getElementById('target-path').value = '';
+			}
+
+			// 获取选中的文件
+			function getSelectedFiles() {
+				const checkboxes = document.querySelectorAll('input[name="selected-files"]:checked');
+				const files = [];
+				checkboxes.forEach(cb => {
+					files.push(cb.value);
+				});
+				return files;
+			}
+
+			// 批量删除
+			batchDeleteBtn.addEventListener('click', function() {
+				const files = getSelectedFiles();
+				if (files.length === 0) {
+					alert('请选择要删除的文件');
+					return;
+				}
+				if (confirm('确定要删除选中的 ' + files.length + ' 个文件/目录吗？')) {
+					const form = document.createElement('form');
+					form.method = 'POST';
+					form.action = '/batch-delete';
+					files.forEach(file => {
+						const input = document.createElement('input');
+						input.type = 'hidden';
+						input.name = 'files';
+						input.value = file;
+						form.appendChild(input);
+					});
+					document.body.appendChild(form);
+					form.submit();
+				}
+			});
+
+			// 批量移动
+			batchMoveBtn.addEventListener('click', function() {
+				const files = getSelectedFiles();
+				if (files.length === 0) {
+					alert('请选择要移动的文件');
+					return;
+				}
+				showMoveCopyForm('move');
+			});
+
+			// 批量复制
+			batchCopyBtn.addEventListener('click', function() {
+				const files = getSelectedFiles();
+				if (files.length === 0) {
+					alert('请选择要复制的文件');
+					return;
+				}
+				showMoveCopyForm('copy');
+			});
+
+			// 确认移动/复制
+			confirmBtn.addEventListener('click', function() {
+				const files = getSelectedFiles();
+				const targetPath = document.getElementById('target-path').value;
+				if (targetPath === '') {
+					alert('请输入目标路径');
+					return;
+				}
+
+				const form = document.createElement('form');
+				form.method = 'POST';
+				if (currentAction === 'move') {
+					form.action = '/batch-move';
+				} else {
+					form.action = '/batch-copy';
+				}
+
+				// 添加选中的文件
+				files.forEach(file => {
+					const input = document.createElement('input');
+					input.type = 'hidden';
+					input.name = 'files';
+					input.value = file;
+					form.appendChild(input);
+				});
+
+				// 添加目标路径
+				const targetInput = document.createElement('input');
+				targetInput.type = 'hidden';
+				targetInput.name = 'target_path';
+				targetInput.value = targetPath;
+				form.appendChild(targetInput);
+
+				document.body.appendChild(form);
+				form.submit();
+			});
+
+			// 取消移动/复制
+			cancelBtn.addEventListener('click', function() {
+				hideMoveCopyForm();
+			});
+		});
+	</script>`
+	}
+
 	// 先添加返回上一级目录的选项（如果不是根目录）
 	if currentPath != "." {
 		parentPath := filepath.Dir(currentPath)
@@ -376,10 +569,17 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 			meta = fmt.Sprintf("文件 • %s • %s", utils.FormatFileSize(info.Size()), info.ModTime().Format("2006-01-02 15:04:05"))
 		}
 
+		// 为管理员添加复选框
+		var checkbox string
+		if sess != nil && sess.Role == constants.RoleAdmin {
+			checkbox = fmt.Sprintf(`<input type="checkbox" name="selected-files" value="%s" style="margin-right: 15px; transform: scale(1.2);">`, fileURL)
+		}
+
 		// 生成文件项
 		var item string
 		if file.IsDir() {
 			item = fmt.Sprintf(`<div class="file-item">
+				%s
 				<div class="file-icon">%s</div>
 				<div class="file-info">
 					<div class="file-name"><a href="/files?path=%s">%s</a></div>
@@ -388,7 +588,7 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 				<div class="file-actions">
 					%s
 				</div>
-			</div>`, icon, fileURL, name, meta, utils.GetAdminActions(r, filePath))
+			</div>`, checkbox, icon, fileURL, name, meta, utils.GetAdminActions(r, filePath))
 		} else {
 			// 检查文件是否在待审核目录中
 			pendingFilePath := filepath.Join(currentPath, name)
@@ -402,6 +602,7 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 			}
 
 			item = fmt.Sprintf(`<div class="file-item">
+				%s
 				<div class="file-icon">%s</div>
 				<div class="file-info">
 					<div class="file-name">%s</div>
@@ -411,7 +612,7 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 					<a href="/download?path=%s" class="btn btn-secondary">下载</a>
 					%s
 				</div>
-			</div>`, icon, name, meta, fileURL, utils.GetAdminActions(r, filePath))
+			</div>`, checkbox, icon, name, meta, fileURL, utils.GetAdminActions(r, filePath))
 		}
 
 		fileList += item
@@ -537,5 +738,337 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 		return utils.GetEmptyMessage()
 	}
 
-	return fileList
+	// 添加批量操作内容到文件列表
+	return batchActions + fileList + batchScript
+}
+
+// 批量删除处理函数
+func BatchDeleteHandler(w http.ResponseWriter, r *http.Request) {
+	// 检查请求方法
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 检查用户权限
+	sess := session.GetCurrentUser(r)
+	if sess == nil || sess.Role != constants.RoleAdmin {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+
+	// 解析表单数据
+	r.ParseForm()
+	files := r.Form["files"]
+
+	if len(files) == 0 {
+		http.Redirect(w, r, "/files?msg=请选择要删除的文件&type=error", http.StatusFound)
+		return
+	}
+
+	// 记录日志
+	utils.LogUserAction(r, "batch_delete", fmt.Sprintf("批量删除文件: %v", files))
+
+	// 批量删除文件
+	var deletedCount int
+	var failedCount int
+
+	for _, filePath := range files {
+		// URL解码路径
+		decodedPath, err := url.QueryUnescape(filePath)
+		if err != nil {
+			failedCount++
+			continue
+		}
+
+		// 构建完整路径
+		fullPath := filepath.Join(config.AppConfig.Server.DownloadDir, decodedPath)
+
+		// 删除文件或目录
+		err = os.RemoveAll(fullPath)
+		if err != nil {
+			failedCount++
+			continue
+		}
+
+		deletedCount++
+	}
+
+	// 构建成功消息
+	msg := fmt.Sprintf("成功删除 %d 个文件，失败 %d 个", deletedCount, failedCount)
+	http.Redirect(w, r, "/files?msg="+url.QueryEscape(msg), http.StatusFound)
+}
+
+// 批量移动处理函数
+func BatchMoveHandler(w http.ResponseWriter, r *http.Request) {
+	// 检查请求方法
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 检查用户权限
+	sess := session.GetCurrentUser(r)
+	if sess == nil || sess.Role != constants.RoleAdmin {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+
+	// 解析表单数据
+	r.ParseForm()
+	files := r.Form["files"]
+	targetPath := r.FormValue("target_path")
+
+	if len(files) == 0 {
+		http.Redirect(w, r, "/files?msg=请选择要移动的文件&type=error", http.StatusFound)
+		return
+	}
+
+	if targetPath == "" {
+		http.Redirect(w, r, "/files?msg=请输入目标路径&type=error", http.StatusFound)
+		return
+	}
+
+	// 清理目标路径
+	targetPath = filepath.Clean(targetPath)
+	if strings.HasPrefix(targetPath, "..") {
+		http.Redirect(w, r, "/files?msg=无效的目标路径&type=error", http.StatusFound)
+		return
+	}
+
+	// 构建完整的目标路径
+	targetFullPath := filepath.Join(config.AppConfig.Server.DownloadDir, targetPath)
+
+	// 确保目标目录存在
+	os.MkdirAll(targetFullPath, 0755)
+
+	// 记录日志
+	utils.LogUserAction(r, "batch_move", fmt.Sprintf("批量移动文件: %v 到 %s", files, targetPath))
+
+	// 批量移动文件
+	var movedCount int
+	var failedCount int
+
+	for _, filePath := range files {
+		// URL解码路径
+		decodedPath, err := url.QueryUnescape(filePath)
+		if err != nil {
+			failedCount++
+			continue
+		}
+
+		// 构建源文件完整路径
+		sourceFullPath := filepath.Join(config.AppConfig.Server.DownloadDir, decodedPath)
+
+		// 获取文件名
+		filename := filepath.Base(decodedPath)
+
+		// 构建目标文件完整路径
+		targetFilePath := filepath.Join(targetFullPath, filename)
+
+		// 检查目标文件是否已存在
+		if _, err := os.Stat(targetFilePath); err == nil {
+			// 文件已存在，生成新文件名
+			ext := filepath.Ext(filename)
+			nameWithoutExt := filename[:len(filename)-len(ext)]
+			count := 1
+			newFilename := fmt.Sprintf("%s_%d%s", nameWithoutExt, count, ext)
+			targetFilePath = filepath.Join(targetFullPath, newFilename)
+
+			// 检查新文件名是否已存在
+			for _, err := os.Stat(targetFilePath); err == nil; _, err = os.Stat(targetFilePath) {
+				count++
+				newFilename := fmt.Sprintf("%s_%d%s", nameWithoutExt, count, ext)
+				targetFilePath = filepath.Join(targetFullPath, newFilename)
+			}
+		}
+
+		// 移动文件
+		err = os.Rename(sourceFullPath, targetFilePath)
+		if err != nil {
+			failedCount++
+			continue
+		}
+
+		movedCount++
+	}
+
+	// 构建成功消息
+	msg := fmt.Sprintf("成功移动 %d 个文件，失败 %d 个", movedCount, failedCount)
+	http.Redirect(w, r, "/files?msg="+url.QueryEscape(msg), http.StatusFound)
+}
+
+// 批量复制处理函数
+func BatchCopyHandler(w http.ResponseWriter, r *http.Request) {
+	// 检查请求方法
+	if r.Method != "POST" {
+		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// 检查用户权限
+	sess := session.GetCurrentUser(r)
+	if sess == nil || sess.Role != constants.RoleAdmin {
+		http.Redirect(w, r, "/login", http.StatusFound)
+		return
+	}
+
+	// 解析表单数据
+	r.ParseForm()
+	files := r.Form["files"]
+	targetPath := r.FormValue("target_path")
+
+	if len(files) == 0 {
+		http.Redirect(w, r, "/files?msg=请选择要复制的文件&type=error", http.StatusFound)
+		return
+	}
+
+	if targetPath == "" {
+		http.Redirect(w, r, "/files?msg=请输入目标路径&type=error", http.StatusFound)
+		return
+	}
+
+	// 清理目标路径
+	targetPath = filepath.Clean(targetPath)
+	if strings.HasPrefix(targetPath, "..") {
+		http.Redirect(w, r, "/files?msg=无效的目标路径&type=error", http.StatusFound)
+		return
+	}
+
+	// 构建完整的目标路径
+	targetFullPath := filepath.Join(config.AppConfig.Server.DownloadDir, targetPath)
+
+	// 确保目标目录存在
+	os.MkdirAll(targetFullPath, 0755)
+
+	// 记录日志
+	utils.LogUserAction(r, "batch_copy", fmt.Sprintf("批量复制文件: %v 到 %s", files, targetPath))
+
+	// 批量复制文件
+	var copiedCount int
+	var failedCount int
+
+	for _, filePath := range files {
+		// URL解码路径
+		decodedPath, err := url.QueryUnescape(filePath)
+		if err != nil {
+			failedCount++
+			continue
+		}
+
+		// 构建源文件完整路径
+		sourceFullPath := filepath.Join(config.AppConfig.Server.DownloadDir, decodedPath)
+
+		// 获取文件信息
+		sourceInfo, err := os.Stat(sourceFullPath)
+		if err != nil {
+			failedCount++
+			continue
+		}
+
+		// 获取文件名
+		filename := filepath.Base(decodedPath)
+
+		// 构建目标文件完整路径
+		targetFilePath := filepath.Join(targetFullPath, filename)
+
+		// 检查目标文件是否已存在
+		if _, err := os.Stat(targetFilePath); err == nil {
+			// 文件已存在，生成新文件名
+			ext := filepath.Ext(filename)
+			nameWithoutExt := filename[:len(filename)-len(ext)]
+			count := 1
+			newFilename := fmt.Sprintf("%s_%d%s", nameWithoutExt, count, ext)
+			targetFilePath = filepath.Join(targetFullPath, newFilename)
+
+			// 检查新文件名是否已存在
+			for _, err := os.Stat(targetFilePath); err == nil; _, err = os.Stat(targetFilePath) {
+				count++
+				newFilename := fmt.Sprintf("%s_%d%s", nameWithoutExt, count, ext)
+				targetFilePath = filepath.Join(targetFullPath, newFilename)
+			}
+		}
+
+		// 复制文件或目录
+		if sourceInfo.IsDir() {
+			// 复制目录
+			err = copyDir(sourceFullPath, targetFilePath)
+		} else {
+			// 复制文件
+			err = copyFile(sourceFullPath, targetFilePath)
+		}
+
+		if err != nil {
+			failedCount++
+			continue
+		}
+
+		copiedCount++
+	}
+
+	// 构建成功消息
+	msg := fmt.Sprintf("成功复制 %d 个文件，失败 %d 个", copiedCount, failedCount)
+	http.Redirect(w, r, "/files?msg="+url.QueryEscape(msg), http.StatusFound)
+}
+
+// 辅助函数：复制文件
+func copyFile(src, dst string) error {
+	// 打开源文件
+	srcFile, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	defer srcFile.Close()
+
+	// 创建目标文件
+	dstFile, err := os.Create(dst)
+	if err != nil {
+		return err
+	}
+	defer dstFile.Close()
+
+	// 复制文件内容
+	_, err = io.Copy(dstFile, srcFile)
+	if err != nil {
+		return err
+	}
+
+	// 复制文件权限
+	srcInfo, err := os.Stat(src)
+	if err != nil {
+		return err
+	}
+
+	return os.Chmod(dst, srcInfo.Mode())
+}
+
+// 辅助函数：复制目录
+func copyDir(src, dst string) error {
+	// 创建目标目录
+	os.MkdirAll(dst, 0755)
+
+	// 读取源目录内容
+	dirEntries, err := os.ReadDir(src)
+	if err != nil {
+		return err
+	}
+
+	for _, entry := range dirEntries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+
+		if entry.IsDir() {
+			// 递归复制子目录
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			// 复制文件
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+
+	return nil
 }

@@ -74,9 +74,10 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		html := `<html lang="zh-CN">
 <head>
 	<meta charset="UTF-8">
-	<meta name="viewport" content="width=device-width, initial-scale=1.0">
-	<title>上传文件 - ` + constants.ServerName + `</title>
-	<style>
+			<meta name="viewport" content="width=device-width, initial-scale=1.0">
+			<title>上传文件 - ` + constants.ServerName + `</title>
+			
+			<style>
 		body {
 			font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
 			background-color: #f5f5f5;
@@ -110,6 +111,7 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		.nav-links {
 			display: flex;
 			gap: 15px;
+			align-items: center;
 		}
 		.nav-links a {
 			text-decoration: none;
@@ -123,9 +125,16 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		.upload-form {
 			background-color: white;
-			padding: 30px;
+			padding: 20px;
 			border-radius: 5px;
 			box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+			margin-bottom: 20px;
+		}
+		.upload-form h2 {
+			margin-top: 0;
+			margin-bottom: 20px;
+			color: #333;
+			font-size: 24px;
 		}
 		.form-group {
 			margin-bottom: 20px;
@@ -147,7 +156,7 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		input[type="file"]:hover {
 			border-color: #4CAF50;
 		}
-		select.form-control {
+		select {
 			display: block;
 			width: 100%;
 			padding: 10px;
@@ -169,6 +178,20 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 			color: white;
 		}
 		.btn-primary:hover {
+			background-color: #45a049;
+		}
+		.btn-secondary {
+			background-color: #2196F3;
+			color: white;
+		}
+		.btn-secondary:hover {
+			background-color: #0b7dda;
+		}
+		.btn-success {
+			background-color: #4CAF50;
+			color: white;
+		}
+		.btn-success:hover {
 			background-color: #45a049;
 		}
 		.message {
@@ -195,6 +218,27 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 			color: #666;
 			margin-top: 10px;
 		}
+		/* 导航栏管理员链接徽章样式 */
+		.admin-link {
+			position: relative;
+			padding-right: 20px;
+		}
+		.admin-link .pending-count {
+			position: absolute;
+			top: -8px;
+			right: -8px;
+			background-color: #dc3545;
+			color: white;
+			font-size: 12px;
+			font-weight: bold;
+			width: 20px;
+			height: 20px;
+			border-radius: 50%;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			box-shadow: 0 2px 4px rgba(0,0,0,0.2);
+		}
 		footer {
 			margin-top: 20px;
 			text-align: center;
@@ -203,20 +247,196 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 			padding: 10px;
 			border-top: 1px solid #eee;
 		}
+		/* 拖拽上传区域样式 */
+		.drop-area {
+			border: 2px dashed #ddd;
+			border-radius: 10px;
+			padding: 40px;
+			text-align: center;
+			background-color: #f9f9f9;
+			transition: all 0.3s ease;
+			margin: 20px 0;
+			cursor: pointer;
+		}
+		.drop-area:hover {
+			border-color: #4CAF50;
+			background-color: #e8f5e9;
+		}
+		.drop-area.drag-over {
+			border-color: #4CAF50;
+			background-color: #e8f5e9;
+			transform: scale(1.02);
+			box-shadow: 0 8px 15px rgba(0,0,0,0.1);
+		}
+		.drop-content {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+		}
+		.drop-icon {
+			font-size: 48px;
+			margin-bottom: 15px;
+			color: #4CAF50;
+		}
+		.drop-content h3 {
+			margin: 0 0 10px 0;
+			color: #333;
+			font-size: 20px;
+		}
+		.drop-content p {
+			margin: 5px 0;
+			color: #666;
+		}
+		.drop-hint {
+			font-size: 12px;
+			color: #888;
+			margin-top: 15px;
+		}
+		.file-label {
+			display: inline-block;
+			margin: 10px 0;
+		}
+		.file-label input[type="file"] {
+			display: none;
+		}
+
+		/* 文件列表样式 */
+		.file-list-container {
+			background-color: #f9f9f9;
+			border: 1px solid #eee;
+			border-radius: 5px;
+			padding: 15px;
+			margin: 20px 0;
+		}
+		.file-list-header {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			margin-bottom: 15px;
+			padding-bottom: 10px;
+			border-bottom: 1px solid #eee;
+		}
+		.file-list-header h3 {
+			margin: 0;
+			color: #333;
+			font-size: 18px;
+		}
+		.btn-sm {
+			padding: 5px 10px;
+			font-size: 12px;
+		}
+		.selected-files {
+			max-height: 300px;
+			overflow-y: auto;
+		}
+		.file-item {
+			display: flex;
+			justify-content: space-between;
+			align-items: center;
+			padding: 10px;
+			margin-bottom: 8px;
+			background-color: white;
+			border: 1px solid #eee;
+			border-radius: 4px;
+			transition: all 0.2s ease;
+		}
+		.file-item:hover {
+			background-color: #e8f5e9;
+			border-color: #4CAF50;
+			transform: translateX(5px);
+		}
+		.file-info {
+			display: flex;
+			align-items: center;
+			flex: 1;
+		}
+		.file-icon-small {
+			font-size: 20px;
+			margin-right: 10px;
+			color: #4CAF50;
+		}
+		.file-name {
+			font-weight: 500;
+			color: #333;
+			overflow: hidden;
+			text-overflow: ellipsis;
+			white-space: nowrap;
+		}
+		.file-size {
+			font-size: 12px;
+			color: #666;
+			margin-left: 10px;
+		}
+		.remove-file {
+			background: none;
+			border: none;
+			color: #dc3545;
+			cursor: pointer;
+			font-size: 16px;
+			padding: 5px;
+			transition: color 0.2s ease;
+		}
+		.remove-file:hover {
+			color: #c82333;
+		}
+
+		/* 上传进度条样式 */
+		.upload-progress {
+			background-color: #f9f9f9;
+			border: 1px solid #eee;
+			border-radius: 5px;
+			padding: 15px;
+			margin: 20px 0;
+		}
+		.progress-label {
+			font-weight: bold;
+			margin-bottom: 10px;
+			color: #333;
+		}
+		.progress-bar-container {
+			width: 100%;
+			height: 20px;
+			background-color: #eee;
+			border-radius: 10px;
+			overflow: hidden;
+			margin-bottom: 8px;
+		}
+		.progress-bar {
+			height: 100%;
+			background-color: #4CAF50;
+			border-radius: 10px;
+			width: 0%;
+			transition: width 0.3s ease;
+		}
+		.progress-text {
+			text-align: center;
+			font-weight: bold;
+			color: #333;
+			font-size: 14px;
+		}
+		.form-actions {
+			display: flex;
+			gap: 10px;
+			margin-top: 20px;
+		}
+		.form-actions .btn {
+			flex: 1;
+		}
 	</style>
 </head>
 <body>
 	<div class="container">
 		<header>
-			<div class="header-content">
-				<h1>📦 ` + constants.ServerName + `</h1>
-				<div>
-					` + utils.GetCurrentUserInfo(r) + `
+				<div class="header-content">
+					<h1>📦 ` + constants.ServerName + `</h1>
+					<div>
+						` + utils.GetCurrentUserInfo(r) + `
+					</div>
 				</div>
-			</div>
-		</header>
+			</header>
 
-		<nav>
+			<nav>
 			<div class="nav-links">
 				<a href="/files">文件列表</a>
 				<a href="/upload">上传文件</a>
@@ -237,25 +457,301 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 					` + dirSelectHTML + `
 				</div>
 
-				<div class="form-group">
-					<label for="file">选择文件</label>
-					<input type="file" id="file" name="file" required>
-					<div class="max-size-info">
-						最大文件大小: ` + utils.GetMaxFileSizeText(sess) + `
+				<!-- 拖拽上传区域 -->
+				<div id="drop-area" class="drop-area">
+					<div class="drop-content">
+						<div class="drop-icon">📁</div>
+						<h3>拖拽文件或文件夹到此处</h3>
+						<p>或</p>
+						<label class="file-label">
+							<input type="file" id="file" name="file" multiple required>
+							<span class="btn btn-primary">选择文件/文件夹</span>
+						</label>
+						<p class="drop-hint">支持选择多个文件或整个文件夹</p>
 					</div>
 				</div>
 
-				<div class="form-group">
-					<button type="submit" class="btn btn-primary">开始上传</button>
+				<div class="max-size-info">
+					最大文件大小: ` + utils.GetMaxFileSizeText(sess) + `
+				</div>
+
+				<!-- 已选择文件列表 -->
+				<div id="file-list" class="file-list-container" style="display: none;">
+					<div class="file-list-header">
+						<h3>已选择的文件 (<span id="file-count">0</span>)</h3>
+						<button type="button" id="clear-files" class="btn btn-secondary btn-sm">清空列表</button>
+					</div>
+					<div id="selected-files" class="selected-files"></div>
+				</div>
+
+				<!-- 上传进度条 -->
+				<div id="upload-progress" class="upload-progress" style="display: none;">
+					<div class="progress-label">上传进度:</div>
+					<div class="progress-bar-container">
+						<div id="progress-bar" class="progress-bar" style="width: 0%;"></div>
+					</div>
+					<div id="progress-text" class="progress-text">0%</div>
+				</div>
+
+				<div class="form-actions">
+					<button type="button" id="upload-btn" class="btn btn-primary">开始上传</button>
 					<a href="/files?path=` + path + `" class="btn btn-secondary">返回</a>
 				</div>
 			</form>
 		</div>
-	
+
 		<footer>
 			<p>版本: ` + constants.Version + ` | 开发者: ` + constants.Developer + `</p>
 		</footer>
 	</div>
+
+	<script>
+		// 上传进度监控
+		document.addEventListener('DOMContentLoaded', function() {
+			const fileInput = document.getElementById('file');
+			const directorySelect = document.getElementById('directory');
+			const dropArea = document.getElementById('drop-area');
+			const progressContainer = document.getElementById('upload-progress');
+			const progressBar = document.getElementById('progress-bar');
+			const progressText = document.getElementById('progress-text');
+			const uploadBtn = document.getElementById('upload-btn');
+			const fileListContainer = document.getElementById('file-list');
+			const selectedFilesContainer = document.getElementById('selected-files');
+			const fileCountElement = document.getElementById('file-count');
+			const clearFilesBtn = document.getElementById('clear-files');
+
+			let selectedFiles = [];
+
+			// 拖拽事件处理
+			['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+				dropArea.addEventListener(eventName, preventDefaults, false);
+			});
+
+			function preventDefaults(e) {
+				e.preventDefault();
+				e.stopPropagation();
+			}
+
+			// 拖拽进入和悬停时的样式
+			['dragenter', 'dragover'].forEach(eventName => {
+				dropArea.addEventListener(eventName, highlight, false);
+			});
+
+			// 拖拽离开和放置时的样式
+			['dragleave', 'drop'].forEach(eventName => {
+				dropArea.addEventListener(eventName, unhighlight, false);
+			});
+
+			function highlight() {
+				dropArea.classList.add('drag-over');
+			}
+
+			function unhighlight() {
+				dropArea.classList.remove('drag-over');
+			}
+
+			// 处理文件放置
+			dropArea.addEventListener('drop', handleDrop, false);
+
+			function handleDrop(e) {
+				const dt = e.dataTransfer;
+				const files = dt.files;
+				handleFiles(files);
+			}
+
+			// 处理文件选择
+			fileInput.addEventListener('change', function() {
+				handleFiles(this.files);
+			});
+
+			// 格式化文件大小
+			function formatFileSize(bytes) {
+				if (bytes === 0) return '0 Bytes';
+				const k = 1024;
+				const sizes = ['Bytes', 'KB', 'MB', 'GB', 'TB'];
+				const i = Math.floor(Math.log(bytes) / Math.log(k));
+				return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+			}
+
+			// 检查文件是否已存在
+			function isFileExists(file) {
+				for (let i = 0; i < selectedFiles.length; i++) {
+					const existingFile = selectedFiles[i];
+					// 检查文件名和大小是否相同
+					if (existingFile.name === file.name && existingFile.size === file.size) {
+						return true;
+					}
+				}
+				return false;
+			}
+
+			// 显示文件列表
+			function displayFileList() {
+				selectedFilesContainer.innerHTML = '';
+				fileCountElement.textContent = selectedFiles.length;
+
+				if (selectedFiles.length === 0) {
+					fileListContainer.style.display = 'none';
+					return;
+				}
+
+				fileListContainer.style.display = 'block';
+
+				selectedFiles.forEach((file, index) => {
+					const fileItem = document.createElement('div');
+					fileItem.className = 'file-item';
+					fileItem.dataset.index = index;
+
+					// 确定显示的文件名
+					const displayName = file.webkitRelativePath ? file.webkitRelativePath : file.name;
+
+					// 使用普通字符串拼接，避免模板字符串问题
+					fileItem.innerHTML = 
+						'<div class="file-info">' +
+						'  <div class="file-icon-small">📄</div>' +
+						'  <div class="file-name">' + displayName + '</div>' +
+						'  <div class="file-size">' + formatFileSize(file.size) + '</div>' +
+						'</div>' +
+						'<button type="button" class="remove-file" title="删除文件">✕</button>';
+
+					selectedFilesContainer.appendChild(fileItem);
+				});
+
+				// 添加删除文件事件监听器
+				const removeButtons = document.querySelectorAll('.remove-file');
+				removeButtons.forEach(btn => {
+					btn.addEventListener('click', function() {
+						const index = parseInt(this.parentElement.dataset.index);
+						removeFile(index);
+					});
+				});
+			}
+
+			// 删除单个文件
+			function removeFile(index) {
+				selectedFiles.splice(index, 1);
+				displayFileList();
+				// 更新fileInput的files属性
+				updateFileInput();
+			}
+
+			// 清空文件列表
+			clearFilesBtn.addEventListener('click', function() {
+				selectedFiles = [];
+				displayFileList();
+				// 更新fileInput的files属性
+				updateFileInput();
+			});
+
+			// 更新fileInput的files属性
+			function updateFileInput() {
+				// 创建一个新的DataTransfer对象
+				const dataTransfer = new DataTransfer();
+				// 将selectedFiles中的文件添加到DataTransfer
+				selectedFiles.forEach(file => {
+					dataTransfer.items.add(file);
+				});
+				// 更新fileInput的files属性
+				fileInput.files = dataTransfer.files;
+			}
+
+			// 递归处理文件和文件夹（追加模式）
+			async function handleFiles(files) {
+				// 遍历新选择的文件，追加到现有列表中
+				for (let i = 0; i < files.length; i++) {
+					const file = files[i];
+					// 检查文件是否已存在，避免重复添加
+					if (!isFileExists(file)) {
+						selectedFiles.push(file);
+					}
+				}
+				// 显示更新后的文件列表
+				displayFileList();
+			}
+
+			// 上传文件
+			uploadBtn.addEventListener('click', function() {
+				if (selectedFiles.length === 0) {
+					alert('请选择要上传的文件');
+					return;
+				}
+
+				const directory = directorySelect.value;
+				uploadFiles(selectedFiles, directory);
+			});
+
+			// 上传多个文件
+			function uploadFiles(files, targetDir) {
+				let totalFiles = files.length;
+				let uploadedFiles = 0;
+				let totalSize = 0;
+				let uploadedSize = 0;
+
+				// 计算总大小
+				for (let file of files) {
+					totalSize += file.size;
+				}
+
+				// 显示进度条
+				progressContainer.style.display = 'block';
+				uploadBtn.disabled = true;
+
+				// 逐个上传文件
+				files.forEach((file, index) => {
+					const formData = new FormData();
+					formData.append('file', file);
+					formData.append('directory', targetDir);
+					// 传递相对路径，用于保留文件夹结构
+					if (file.webkitRelativePath) {
+						formData.append('relativePath', file.webkitRelativePath);
+					}
+
+					const xhr = new XMLHttpRequest();
+
+					// 监听上传进度
+					xhr.upload.addEventListener('progress', function(e) {
+						if (e.lengthComputable) {
+							// 更新已上传大小
+							const fileUploaded = uploadedSize + e.loaded;
+							const percentComplete = Math.round((fileUploaded / totalSize) * 100);
+							progressBar.style.width = percentComplete + '%';
+							progressText.textContent = percentComplete + '% (' + (uploadedFiles + 1) + '/' + totalFiles + ')';
+						}
+					});
+
+					// 上传完成处理
+					xhr.addEventListener('load', function() {
+						uploadedFiles++;
+						uploadedSize += file.size;
+
+						// 更新进度
+						const percentComplete = Math.round((uploadedSize / totalSize) * 100);
+						progressBar.style.width = percentComplete + '%';
+						progressText.textContent = percentComplete + '% (' + uploadedFiles + '/' + totalFiles + ')';
+
+						// 所有文件上传完成
+						if (uploadedFiles === totalFiles) {
+							window.location.href = '/files?path=' + encodeURIComponent(targetDir) + '&msg=' + encodeURIComponent('文件上传成功');
+						}
+					});
+
+					// 上传错误处理
+					xhr.addEventListener('error', function() {
+						alert('文件上传失败，请重试');
+						// 重置进度条
+						progressContainer.style.display = 'none';
+						progressBar.style.width = '0%';
+						progressText.textContent = '0%';
+						uploadBtn.disabled = false;
+					});
+
+					// 发送请求
+					xhr.open('POST', '/upload', true);
+					xhr.send(formData);
+				});
+			}
+		});
+	</script>
 </body>
 </html>`
 
@@ -306,8 +802,24 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// 清理文件名
-		filename := utils.SanitizeFilename(handler.Filename)
+		// 获取相对路径（用于文件夹上传，保留目录结构）
+		relativePath := r.FormValue("relativePath")
+		var filename string
+		var fullPath string
+
+		// 根据是否有相对路径决定文件名和保存路径
+		if relativePath != "" {
+			// 文件夹上传，使用相对路径保留目录结构
+			filename = utils.SanitizeFilename(relativePath)
+			// 提取路径部分
+			pathOnly := filepath.Dir(filename)
+			// 构建完整路径
+			fullPath = filepath.Join(path, pathOnly)
+		} else {
+			// 单个文件上传
+			filename = utils.SanitizeFilename(handler.Filename)
+			fullPath = path
+		}
 
 		// 根据用户角色决定保存目录
 		var targetDir string
@@ -324,9 +836,9 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		// 构建保存路径
-		savePath := filepath.Join(targetDir, path, filename)
+		savePath := filepath.Join(targetDir, fullPath, filepath.Base(filename))
 
-		// 创建目标目录
+		// 创建目标目录（递归创建所有必要的父目录）
 		err = os.MkdirAll(filepath.Dir(savePath), 0755)
 		if err != nil {
 			http.Redirect(w, r, fmt.Sprintf("/upload?msg=%s&type=error", url.QueryEscape("创建目录失败")), http.StatusFound)

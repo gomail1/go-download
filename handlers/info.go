@@ -344,8 +344,12 @@ func InfoHandler(w http.ResponseWriter, r *http.Request) {
 					<div class="info-card">
 						<h3>服务器配置</h3>
 						<div class="info-item">
-							<div class="info-label">端口</div>
+							<div class="info-label">HTTP端口</div>
 							<div class="info-value">` + fmt.Sprintf("%d", config.AppConfig.Server.Port) + `</div>
+						</div>
+						<div class="info-item">
+							<div class="info-label">HTTPS端口</div>
+							<div class="info-value">` + fmt.Sprintf("%d", config.AppConfig.Server.HttpsPort) + `</div>
 						</div>
 						<div class="info-item">
 							<div class="info-label">下载目录</div>
@@ -385,13 +389,7 @@ func InfoHandler(w http.ResponseWriter, r *http.Request) {
 						</div>
 					</div>
 
-					<div class="info-card">
-						<h3>内存使用</h3>
-						<div class="info-item">
-							<div class="info-label">当前协程数</div>
-							<div class="info-value">` + fmt.Sprintf("%d", runtime.NumGoroutine()) + `</div>
-						</div>
-					</div>
+
 				</div>
 			</div>
 

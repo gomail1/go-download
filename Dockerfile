@@ -4,8 +4,8 @@ FROM golang:1.21-alpine AS builder
 # 设置工作目录
 WORKDIR /app
 
-# 复制go.mod和go.sum文件
-COPY go.mod go.sum ./
+# 复制go.mod文件
+COPY go.mod ./
 
 # 下载依赖
 RUN go mod tidy
@@ -35,7 +35,7 @@ RUN mkdir -p config downloads pending logs ssl
 RUN chmod +x start.sh
 
 # 暴露端口
-EXPOSE 9980 9443
+EXPOSE 9980 1443
 
 # 启动应用程序
 CMD ["./go-download-server"]

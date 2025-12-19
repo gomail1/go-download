@@ -1,4 +1,4 @@
-# Go HTTP服务器下载站-v0.0.2 gomail1  
+# Go HTTP服务器下载站-v0.0.3 gomail1  
 
 使用Go语言开发的高性能文件下载站，提供文件上传、下载、浏览、审核和管理功能，支持基于角色的用户权限控制。
 
@@ -6,6 +6,37 @@
 **Docker仓库链接**: [https://hub.docker.com/r/gomail1/go_downloader](https://hub.docker.com/r/gomail1/go_downloader)
 
 ## 更新项目介绍
+
+### v0.0.3 版本更新内容
+
+#### 管理员批量操作功能
+- ✅ **批量删除**：支持批量删除多个文件和目录，带确认提示
+- ✅ **批量移动**：支持将多个文件和目录移动到指定目录
+- ✅ **批量复制**：支持将多个文件和目录复制到指定目录
+- ✅ **全选/取消全选**：一键选择或取消选择所有文件
+- ✅ **目录选择下拉菜单**：批量移动/复制时可选择目标目录
+- ✅ **按钮样式优化**：所有按钮都有明确的颜色区分
+- ✅ **界面简化**：批量操作按钮文本简化，更简洁明了
+- ✅ **批量操作日志**：完整记录所有批量操作，便于审计
+
+#### 文件上传功能增强
+- ✅ **拖拽上传**：支持拖拽文件或文件夹到上传区域
+- ✅ **文件夹上传**：支持直接上传整个文件夹，保留目录结构
+- ✅ **上传进度条**：实时显示上传进度，提高用户体验
+- ✅ **文件列表显示**：显示已选择的文件列表，支持删除单个文件
+- ✅ **AJAX上传**：异步上传文件，页面不刷新
+- ✅ **响应式设计**：适配各种设备尺寸
+
+#### 界面优化
+- ✅ **按钮颜色统一**：所有按钮使用一致的颜色方案
+- ✅ **操作流程简化**：减少不必要的操作步骤
+- ✅ **视觉反馈增强**：操作有明确的视觉反馈
+- ✅ **代码优化**：移除不必要的依赖，提高性能
+
+#### 配置优化
+- ✅ **HTTPS端口调整**：将默认HTTPS端口从9443调整为1443
+- ✅ **版本号更新**：项目版本从v0.0.2更新为v0.0.3
+- ✅ **跨设备文件移动修复**：优化文件审核流程，解决跨设备文件移动失败问题
 
 ### v0.0.2 版本更新内容
 
@@ -42,7 +73,6 @@
 - ✅ **管理员账号保护**：管理员账号默认不可删除，只能修改密码
 - ✅ **创建目录优化**：将创建目录功能放到审核文件前面
 - ✅ **父目录显示优化**：将父目录显示改为"根目录"
-- ✅ **跨设备文件移动修复**：修复了不同设备间文件审核通过失败问题，确保跨设备文件移动正常
 
 #### UI优化
 - ✅ **界面大小统一**：统一了所有页面的容器宽度
@@ -60,6 +90,10 @@
 - ✅ **配置自动生成**：首次运行自动生成配置文件
 - ✅ **启动脚本更新**：修复启动脚本中的端口和目录问题
 - ✅ **Docker配置优化**：修复配置文件复制路径
+- ✅ **文件夹上传支持**：支持直接上传整个文件夹，保留目录结构
+- ✅ **拖拽上传功能**：支持拖拽文件/文件夹到上传区域
+- ✅ **上传进度显示**：实时显示文件上传进度
+- ✅ **响应式设计**：优化移动端访问体验，支持不同设备尺寸
 
 ### v0.0.1 版本内容
 
@@ -210,7 +244,7 @@ go mod tidy
   ],
   "server": {
     "port": 9980,
-    "https_port": 9443,
+    "https_port": 1443,
     "cert_file": "./ssl/cert.pem",
     "key_file": "./ssl/key.pem",
     "download_dir": "./downloads",
@@ -228,7 +262,7 @@ go mod tidy
 - 支持通过Web界面的用户管理功能修改用户信息和密码
 
 **HTTPS配置说明：**
-- 默认HTTPS端口：9443
+- 默认HTTPS端口：1443
 - 默认证书路径：`./ssl/cert.pem` 和 `./ssl/key.pem`
 - 生成自签名证书命令：
   ```bash
@@ -241,11 +275,11 @@ go mod tidy
 1. **配置文件配置**：在 `config/config.json` 文件中设置证书路径
 2. **命令行参数配置**：
    ```bash
-   go run main.go --https-port=9443 --cert-file=./ssl/my-cert.pem --key-file=./ssl/my-key.pem
-   ```
+  go run main.go --https-port=1443 --cert-file=./ssl/my-cert.pem --key-file=./ssl/my-key.pem
+  ```
 3. **环境变量配置**：
    ```bash
-   export HTTPS_PORT=9443
+   export HTTPS_PORT=1443
    export SSL_CERT_FILE=./ssl/my-cert.pem
    export SSL_KEY_FILE=./ssl/my-key.pem
    go run main.go
@@ -307,7 +341,7 @@ services:
     restart: unless-stopped
     ports:
       - "9980:9980"
-      - "9443:9443"
+      - "1443:1443"
     volumes:
       - ./downloads:/app/downloads
       - ./pending:/app/pending
@@ -328,7 +362,7 @@ services:
 - 配置文件将在首次运行时自动生成
 - 服务启动后可访问：
   - HTTP: `http://localhost:9980`
-  - HTTPS: `https://localhost:9443`
+  - HTTPS: `https://localhost:1443`
 - 所有数据将自动持久化到当前目录下的`downloads`、`pending`、`logs`、`config`和`ssl`目录
 - 如需修改端口或其他配置，可直接编辑`docker-compose.yml`文件后重启服务
 - SSL证书放置在`ssl`目录下，如证书不存在，HTTPS服务将无法启动
@@ -350,7 +384,7 @@ services:
     restart: unless-stopped
     ports:
       - "9980:9980"
-      - "9443:9443"
+      - "1443:1443"
     volumes:
       - /vol1/1000/docker/go-download/downloads:/app/downloads
       - /vol1/1000/docker/go-download/pending:/app/pending
@@ -385,9 +419,8 @@ services:
 ├── downloads/    # 下载文件目录
 ├── pending/      # 待处理文件目录
 ├── logs/         # 日志文件目录
-├── config/       # 配置目录
-│   └── config.json   # 配置文件
-└── ssl/          # SSL证书目录
+└── config/       # 配置目录
+    └── config.json   # 配置文件
 ```
 
 确保该目录权限设置正确，以便容器能够正常读写数据。
@@ -504,7 +537,7 @@ services:
 - 安全的文件删除机制
 - 目录遍历防护
 
-## 操作界面演示-v0.0.1版本演示
+## 操作界面演示
 
 以下是系统主要功能的操作界面演示：
 

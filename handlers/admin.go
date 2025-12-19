@@ -115,6 +115,18 @@ func AdminHandler(w http.ResponseWriter, r *http.Request) {
 		.nav-links a:hover {
 			background-color: #e0e0e0;
 		}
+		/* 导航栏管理员链接徽章样式 */
+		.admin-link {
+			position: relative;
+			padding-right: 20px;
+		}
+		.nav-links .admin-link .pending-count {
+			top: -8px;
+			right: -8px;
+			font-size: 12px;
+			width: 20px;
+			height: 20px;
+		}
 		.admin-panel {
 			background-color: white;
 			padding: 30px;
@@ -223,7 +235,7 @@ func AdminHandler(w http.ResponseWriter, r *http.Request) {
 			<div class="nav-links">
 				<a href="/files">文件列表</a>
 				<a href="/upload">上传文件</a>
-				<a href="/admin">管理员</a>
+				` + utils.GetAdminLinks(r) + `
 			</div>
 		</nav>
 
