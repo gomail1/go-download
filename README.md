@@ -272,7 +272,17 @@
 
 ## 🐳 Docker部署方案
 
-### 1. 常规Docker部署
+### 1. 多架构镜像支持
+系统提供多架构 Docker 镜像，支持不同平台的部署：
+
+| 架构 | 标签 | 适用平台 |
+|------|------|----------|
+| X86_64 | `latest` | 大多数服务器和桌面电脑 |
+| ARM64 | `latest-arm64` | 树莓派 4、苹果 M 系列芯片、ARM 服务器等 |
+
+### 2. 常规Docker部署
+
+#### X86_64 架构部署
 ```yaml
 version: '3.8'
 services:
@@ -301,7 +311,38 @@ services:
         max-file: "3"
 ```
 
-### 2. 飞牛专用部署
+#### ARM64 架构部署
+```yaml
+version: '3.8'
+services:
+  go-download-server:
+    # Docker Hub镜像
+    image: gomail1/go_downloader:latest-arm64
+    # 备选镜像源：GitHub Container Registry
+    # image: ghcr.io/gomail1/go-download:latest-arm64
+    container_name: go-download-server
+    restart: unless-stopped
+    ports:
+      - "9980:9980"
+      - "1443:1443"
+    volumes:
+      - ./downloads:/app/downloads
+      - ./pending:/app/pending
+      - ./logs:/app/logs
+      - ./config:/app/config
+      - ./ssl:/app/ssl
+    environment:
+      - TZ=Asia/Shanghai
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+```
+
+### 3. 飞牛专用部署
+
+#### X86_64 架构部署
 ```yaml
 version: '3.8'
 services:
@@ -327,34 +368,32 @@ services:
         max-file: "3"
 ```
 
-### 3. 1panel部署
+#### ARM64 架构部署
 ```yaml
 version: '3.8'
 services:
   go-download-server:
-    # Docker Hub镜像
-    image: gomail1/go_downloader:latest
-    # 备选镜像源：GitHub Container Registry
-    # image: ghcr.io/gomail1/go-download:latest
+    image: gomail1/go_downloader:latest-arm64
     container_name: go-download-server
     restart: unless-stopped
     ports:
       - "9980:9980"
       - "1443:1443"
     volumes:
-      - ./downloads:/app/downloads
-      - ./pending:/app/pending
-      - ./logs:/app/logs
-      - ./config:/app/config
-      - ./ssl:/app/ssl
+      - /vol1/1000/docker/go-download/downloads:/app/downloads
+      - /vol1/1000/docker/go-download/pending:/app/pending
+      - /vol1/1000/docker/go-download/logs:/app/logs
+      - /vol1/1000/docker/go-download/config:/app/config
+      - /vol1/1000/docker/go-download/ssl:/app/ssl
     environment:
-      TZ: Asia/Shanghai
+      - TZ=Asia/Shanghai
     logging:
       driver: json-file
       options:
         max-size: "10m"
         max-file: "3"
 ```
+
 
 ## 🚀 快速开始
 
