@@ -1,60 +1,202 @@
-# Go HTTP服务器下载站 - V1.1.0
+﻿# Go HTTP服务器下载站 - V1.2.0
 
-使用Go语言开发的高性能文件下载站，提供文件上传、下载、浏览、审核和管理功能，支持基于角色的用户权限控制、全平台响应式设计，以及多协议下载功能。
+使用Go语言开发的高性能文件下载站，提供文件上传、下载、浏览、审核和管理功能，支持基于角色的用户权限控制、全平台响应式设计、多协议下载功能，以及完善的安全防护和监控告警系统。
 
 **GitHub仓库链接**: [https://github.com/gomail1/go-download](https://github.com/gomail1/go-download)
 **Docker仓库链接**: [https://hub.docker.com/r/gomail1/go_downloader](https://hub.docker.com/r/gomail1/go_downloader)
 
 ## 📢 最新更新
-### V1.1.0 版本内容 (2026-02-06)
-#### ✅ Bug修复
-1. **修复文件路径处理问题**
-   - 移除了下载处理中将下划线替换为空格的代码
-   - 现在系统会保持路径原样，不会将下划线替换为空格
-   - 解决了用户访问包含下划线的文件路径时的错误
 
-#### ✅ 核心功能更新
-1. **短链接功能**
-   - 新增短链接生成和管理功能
-   - 实现了 "文件名: 短链接" 的分享格式
+### V1.2.0 版本内容 (2026-08-30 ~ 2026-08-31)
 
-#### 📱 UI/UX优化
-1. **短链不存在时的用户体验优化**
-   - 当短链不存在或已过期时，显示美观的提示页面
-   - 提示页面包含友好的错误信息和自动跳转倒计时
-   - 3秒后自动跳转到首页，提升用户体验
+#### 🔒 全面安全加固
+1. **XSS 跨站脚本防护**
+   - 创建 `utils/xss.go` 工具，提供 `EscapeHTML`、`EscapeJavaScript`、`EscapeAttribute`、`SanitizeHTML`、`IsValidURL` 等函数
+   - 将 XSS 防护应用到所有关键页面：文件列表、用户管理、日志页面、管理员界面
+   - 对文件名、路径、分类、用户名、日志详情等用户输入进行严格编码
+   - 清理危险HTML标签（script、style、iframe等）和事件处理属性
+   - 验证和清理危险URL协议（javascript:、vbscript:等）
 
-#### 🔧 技术优化
-1. **日志系统优化**
-   - 移除了分享请求的调试日志，减少终端输出冗余信息
-   - 保持了系统核心功能的日志记录
-   - 提升了系统运行时的日志整洁度
+2. **CSRF 跨站请求伪造防护**
+   - 创建 `utils/csrf.go` 工具，基于会话ID生成和验证CSRF令牌
+   - 使用 `crypto/rand` 生成32字节安全令牌，常量时间比较防止时序攻击
+   - 支持表单隐藏字段（`csrf_token`）和AJAX请求头（`X-CSRF-Token`）两种方式
+   - 登录时自动生成CSRF令牌，页面注入meta标签和csrf.js，表单中添加隐藏字段
+   - 将 CSRF 防护应用到所有关键操作：
+     - 用户管理（添加用户、修改密码、删除用户）
+     - 文件操作（上传、删除、批量删除、批量移动）
+     - 分类管理（创建、编辑、删除分类）
+     - 下载任务API（创建、暂停、恢复、删除任务）
+   - 公开分享计数 `/api/increment-share` 保持匿名豁免
 
-2. **短链接存储机制**
-   - 使用 JSON 文件存储短链接映射，确保重启服务器后短链接仍然有效
-   - 服务器启动时会将短链接数据加载到内存中，提高访问速度
-   - 短链数据结构紧凑，内存占用极小
+3. **路径遍历防护增强**
+   - 创建 `utils/path_security.go` 工具，提供 `ValidateSafePath` 函数
+   - 8步严格验证：清理路径、检查`..`、获取绝对路径、构建完整路径、验证是否在基础目录内等
+   - 拒绝绝对路径、路径穿越（`..`）、越出下载目录的路径
+   - 应用到文件下载、文件浏览等所有路径相关操作
 
-### 历史版本概述
-| 日期       | 版本     | 主要更新内容                                                                 |
-|------------|----------|------------------------------------------------------------------------------|
-| 2026-02-06 | **v1.1.0** | 新增短链接功能，实现"文件名: 短链接"的分享格式，优化短链不存在时的用户体验，修复文件路径处理问题，移除分享请求的调试日志 |
-| 2026-02-02 | **v1.0.0** | 修复分享链接和下载链接中的空格处理问题，优化浏览器文件名显示，版本号升级到1.0.0，系统进入稳定版本阶段 |
-| 2026-01-19 | **v0.0.9** | 实现无需登录的下载和分享功能，优化搜索结果页面，添加页脚信息可配置化，更新页脚年份为2025-2026，优化配置加载逻辑 |
-| 2025-12-29 | **v0.0.8** | 实现核心功能更新（文件列表自定义排序、导航栏名称自定义、热力图统计优化、文件图标优化），修复BUG（移动端适配、热力图统计、Docker IP记录），以及多项性能优化（批量写入、热力图数据过期、自动化工具检测、读写锁分离、文件缓存、内存优化、统计数据清理） |
-| 2025-12-28 | **v0.0.7** | 实现权限管理优化、多协议下载集成、完整的免责协议功能和全面的UI/UX优化        |
-| 2025-12-24 | **v0.0.6** | 实现移动端适配优化，包括6级媒体查询断点、触摸友好交互、响应式表格设计等     |
-| 2025-12-21 | **v0.0.5** | 实现智能日志级别分类系统、搜索栏支持、热力图统计功能、API统计接口等         |
-| 2025-12-20 | **v0.0.4** | 实现每日上传限制功能、优化错误处理机制、改进界面布局                        |
-| 2025-12-19 | **v0.0.3** | 添加管理员批量操作功能、增强文件上传体验、优化界面设计                        |
-| 2025-12-18 | **v0.0.2** | 优化日志系统、增强服务器信息页面、改进项目结构                                |
-| 2025-12-18 | **v0.0.1** | 实现基础功能、用户角色系统、文件审核机制，建立系统核心框架                    |
+4. **文件类型安全检查**
+   - 上传文件时检查文件类型，阻止危险文件上传
+   - 防止上传可执行文件、脚本文件等危险类型
+
+5. **会话管理安全性增强**
+   - 使用 `crypto/rand` 生成安全的会话ID
+   - 添加 `HttpOnly`、`SameSite` 属性，`Secure` 按部署切换
+   - 会话过期自动清理，密码修改时失效相关会话
+   - 新增过期会话清理任务，定期回收失效session
+
+6. **下载任务API鉴权补全**
+   - `internal/api`（gin）增加会话鉴权中间件（匿名 → 401）
+   - 增加CSRF中间件（缺令牌 → 403）
+   - 所有任务端点都在需要登录+CSRF的路由组中
+   - WebSocket端点也添加了登录鉴权
+
+7. **分类管理鉴权补全**
+   - 分类API（POST/PUT/DELETE）在CSRF校验之外增加登录鉴权
+   - 防止普通用户改全站分类
+
+#### ⚡ 性能优化
+1. **Gzip 压缩**
+   - 创建 `middleware.go`，启用 Gzip 压缩
+   - 压缩 HTML、CSS、JavaScript 等文本资源，减少传输大小
+   - 不对文件下载（`/download`、`/s/`）进行压缩，避免性能问题
+   - 不对WebSocket（`/ws/`）进行压缩，避免Hijack问题
+
+2. **静态资源缓存**
+   - 为静态资源（CSS、JS、图片、字体、图标）设置缓存头
+   - 根据文件扩展名设置不同缓存时间：
+     - CSS/JS：1天
+     - 图片（png/jpg/gif/svg/webp）：7天
+     - 字体（woff/woff2/ttf/eot）：30天
+     - 图标（ico）：30天
+   - 减少重复请求，提高访问速度
+
+#### 📊 功能优化
+1. **监控告警系统**
+   - 创建 `utils/monitor.go`，实现系统监控和告警功能
+   - 监控 CPU、内存、磁盘使用率，请求量、错误率、响应时间
+   - 支持告警规则配置，超过阈值自动触发告警
+   - 将监控告警合并到服务器信息页面，统一展示
+
+2. **跨平台磁盘使用率计算**
+   - 创建 `utils/monitor_disk_windows.go`（Windows 平台）
+   - 创建 `utils/monitor_disk_unix.go`（Linux/Mac 平台）
+   - 使用条件编译实现跨平台支持
+   - Windows 使用 `GetDiskFreeSpaceExW`，Linux/Mac 使用 `syscall.Statfs`
+   - 在三个平台上都能准确计算磁盘使用率
+
+3. **日志管理完善**
+   - 创建 `utils/log_management.go`，完善日志管理功能
+   - 支持日志级别分类、日志查询、日志清理
+   - 记录用户操作、系统事件、安全告警
+
+4. **热力图页面修复**
+   - 修复热力图页面的 HTML 结构问题
+   - 使用本地 Chart.js，避免依赖外部CDN
+   - 添加降级方案，图表加载失败时显示友好提示
+
+5. **文件分类管理**
+   - 支持管理员自定义文件分类
+   - 用户可对文件进行归类，前端按分类展示
+   - 分类管理集成到文件列表页面，操作便捷
+
+6. **前端分页设计**
+   - 文件列表支持分页展示
+   - 可配置每页显示数量，支持页码跳转
+   - 提高大量文件时的加载速度
+
+#### 🎨 界面全面重新设计
+1. **前端用户界面**
+   - 现代简洁风格（蓝白配色）
+   - 优化 Hero 区域：背景、间距、字体大小、搜索框样式
+   - 优化文件列表展示：卡片式布局、文件图标、下载按钮
+   - 优化分类展示：分类标签、分类筛选
+   - 移除不必要的顶部导航栏，简化界面布局
+   - 支持响应式设计，适配桌面端和移动端
+
+2. **后端管理界面**
+   - 高级质感风格（Stripe 风格）
+   - 优化导航栏：侧边栏导航、图标+文字
+   - 优化数据表格：斑马纹、悬停效果、操作按钮
+   - 优化表单设计：输入框、按钮、下拉框
+   - 优化统计卡片：数据展示、图标、颜色
+   - 所有管理操作在右侧内容区展开，不跳转到单独页面
+
+#### 📝 开发优化
+1. **测试覆盖率提升**
+   - 新增 14+ 个测试用例
+   - 覆盖安全工具、路径验证、CSRF防护、XSS防护、短链安全等
+   - 所有测试用例全部通过
+
+2. **代码风格指南**
+   - 创建 `CODE_STYLE.md`
+   - 包括命名规范、注释规范、错误处理规范等
+
+3. **并发安全修复**
+   - 修复用户管理自死锁问题（严重）
+   - `config.UsersMu`（`sync.RWMutex`）保护并发读写
+   - stats/files等共享数据访问加锁
+   - 目录缓存返回副本防竞态
+
+4. **下载引擎状态机修复**
+   - 暂停任务被误标为「失败」：错误判定中排除 `context.Canceled`
+   - `CancelTask` 现在真正调用 `cancelFunc()` 中断任务
+
+5. **WebSocket 实时推送修复**
+   - `statusResponseWriter` / `gzipResponseWriter` 实现 `http.Hijacker`
+   - 启动时赋值 `GlobalWebSocketHub`，修复实时进度推送
+
+6. **其他健壮性**
+   - `GetClientIP` 仅在 `TrustProxy` 开启时信任 `X-Forwarded-For`
+   - BT 种子文件解析限制读取大小，防大文件打爆内存
+   - `SaveConfig` 改为原子写（临时文件 + rename）
+   - `daily_upload` 统计数据落盘持久化
+   - `CheckAPIAuthentication` 支持独立 API Key 配置
+
+#### 🔒 短链接安全策略（按文件去重，防无限注入）
+1. **漏洞根因**
+   - 旧版本生成短链**不校验、不限制**：攻击者可直接模拟请求，反复为同一文件生成短链，向服务器无限注入垃圾记录。
+
+2. **修复方案——按目标文件去重（核心防线）**
+   - 分享是公开能力，**不要求登录鉴权**；防滥用不靠鉴权，而靠「同一个文件永远只对应一条短链」。
+   - 生成短链前先按规范化后的目标路径查询：若文件已存在短链，**直接复用既有短码，不写入新记录、不走限流**。
+   - 因此短链总数上限天然等于「下载目录里的文件总数」，外部无法通过反复请求无限注入。
+
+3. **第二、三道防线（兜底，仅真正新增时触发）**
+   - **单 IP 限流**：默认 1 分钟内同 IP 最多生成 120 条（`DefaultShortURLRateLimit`），超限返回 `ErrShortURLRateLimited`，需稍后重试。
+   - **全局总量上限**：默认最多 5000 条（`DefaultShortURLMaxTotal`），超出返回 `ErrShortURLQuotaExceeded`，需先清理历史短链。
+   - 两项阈值均可通过 `SetShortURLPolicy` 覆盖（0 值回退默认）。
+
+4. **限流器内存安全修复**
+   - 旧实现按 `limit` 值预分配切片（`make([]T, 0, limit)`），`limit` 取值很大时单次请求即分配数十 MB，高频调用可打爆内存、卡死进程。
+   - 改为仅按「实际记录数 + 1」预分配并钉死单 key 上限 `rateLimiterMaxRecords=1024`；同时限制跟踪 key（IP）数量 `rateLimiterMaxKeys=10000`，超量自动清理过期条目。已加回归测试 `TestRateLimiterNoPrealloc` 守护。
+
+5. **路径安全与清理**
+   - 生成前 `ValidateShortURLPath` 拒绝绝对路径、路径穿越（`..`）、越出下载目录及目录对象，仅允许已存在的普通文件。
+   - 解析短链时**二次校验**路径，历史库中残留的非法条目会自动失效。
+   - 管理端支持 `ResetShortURLStore` 一键清空全部短链（内存 + 磁盘 `config/shorturls.json`）。
+
+#### ✅ 多协议下载启用与优化
+1. **BitTorrent（已启用，真实下载）**
+   - `bt` / `magnet` 协议注册为真实下载器（基于 `github.com/anacrolix/torrent`）。
+   - 支持磁力链接（`magnet:?xt=urn:btih:...`）与 `.torrent` 种子文件，支持做种、断点续传。
+
+2. **FTP（已启用，真实下载）**
+   - `ftp` 协议注册为真实下载器，采用 **PASV 被动模式 + RETR** 流式拉取文件，支持进度/暂停/恢复/取消。
+   - 仅支持明文 `ftp://`；**未实现 FTPS/TLS**，请勿用于传输敏感文件。
+
+3. **eDonkey2000 / ED2K（已启用，真实下载）**
+   - `ed2k` 协议注册为真实 eDonkey2000 客户端（`ed2k://` 链接），实现：
+     - 真实 **ed2k 哈希**：每 9728000 字节（9500×1024）分块做 MD4，多分块再对分块哈希拼接做 MD4，用于分片校验与完整性验证。
+     - 服务器登录与源发现：登录 eD2K 服务器获取 peer 的 userhash / IP / 端口。
+     - 对等端握手（Hello/HelloAnswer）、分片请求（RequestParts）/接收（PartData）、**zlib 解压**、分片位图管理、MD4 分片校验、断点续传（`.part` 文件 + 位图）。
+   - 说明：Kad 网络、协议混淆、UDP 源交换、AICH 暂未实现；真实端到端下载需联网环境（活的 eD2K 服务器 + 在线 peer），本机未做联网验证。
 
 ## 🎯 功能特性
 
 ### 🔐 权限管理系统
 - **多角色权限控制**：支持管理员、二级管理员、普通用户和访客四种角色
-- **细粒度权限分配**：针对不同角色分配不同的操作权限（查看文件、上传、下载、删除、创建目录、审核文件、用户管理、查看日志、查看统计信息）
+- **细粒度权限分配**：针对不同角色分配不同的操作权限
 - **会话管理**：基于Cookie的安全认证机制，支持会话过期自动清理（24小时有效期）
 - **默认子用户**：自动创建 `download-user` 子用户，用于接收下载任务文件，无登录权限
 
@@ -74,9 +216,14 @@
 | 查看统计信息   | ✅     | ✅         | ❌       | ❌   |
 | 无限制上传     | ✅     | ✅         | ❌       | ❌   |
 | 下载任务管理   | ✅     | ✅         | ❌       | ❌   |
+| 分类管理       | ✅     | ✅         | ❌       | ❌   |
 
 ### 🌐 多协议下载功能
-- **多协议支持**：当前版本支持 HTTP/HTTPS 协议
+- **多协议支持**：当前版本支持 HTTP/HTTPS、BitTorrent（磁力链接 / `.torrent`）、FTP（明文 PASV）以及 eDonkey2000（ED2K）协议下载
+  - `http` / `https`：文件直链（最常见），支持多线程加速与断点续传
+  - `bt` / `magnet`：基于 `anacrolix/torrent` 的真实 BitTorrent 下载，支持做种与续传
+  - `ftp`：PASV 被动模式 + RETR 真实流式拉取（仅明文，未实现 FTPS/TLS）
+  - `ed2k`：真实 eDonkey2000 客户端，含 ed2k 哈希分片校验、服务器源发现、zlib 解压与断点续传
 - **多线程加速**：支持多线程下载，提高下载速度
 - **断点续传**：支持断点续传功能，保障下载可靠性
 - **下载任务管理**：
@@ -84,6 +231,7 @@
   - 实时显示任务状态、进度、速度等信息
   - 支持暂停、恢复、删除下载任务
   - 提供任务详情页面，显示完整任务信息
+  - WebSocket 实时推送下载进度
 - **随机端口生成**：为 BitTorrent 添加随机端口生成功能，防止 ISP 封锁
 - **自动审核机制**：所有下载文件默认归属于 `download-user` 子用户，自动进入待审核队列
 
@@ -102,6 +250,22 @@
   - 拒绝机制：支持拒绝文件上传/下载请求，自动清理待审核文件
   - 批量审核：支持批量处理待审核文件
 
+### 📂 文件分类管理
+- **自定义分类**：管理员可创建、编辑、删除文件分类
+- **文件归类**：用户可对文件进行归类，设置文件所属分类
+- **前端展示**：前端首页按分类展示文件，支持分类筛选
+- **分类图标**：每个分类可设置自定义图标
+- **权限控制**：只有管理员和二级管理员可以管理分类
+
+### 🔗 短链接功能
+- **短链生成**：为文件生成短链接，方便分享
+- **按文件去重**：同一个文件永远只对应一条短链，防止无限注入
+- **单IP限流**：默认1分钟内同IP最多生成120条短链
+- **全局总量上限**：默认最多5000条短链
+- **路径安全**：生成前验证路径安全，防止路径遍历
+- **短链管理**：管理端支持查看和删除短链
+- **友好提示**：短链不存在或已过期时，显示美观的提示页面，3秒后自动跳转到首页
+
 ### 📄 免责协议功能
 - **首次登录确认**：用户首次登录时必须同意免责协议
 - **同意状态持久化**：同意状态保存到配置文件，后续登录无需再次确认
@@ -118,6 +282,7 @@
 - **管理员保护**：超级管理员账号默认不可删除，对二级管理员隐藏
 - **密码管理**：支持修改用户密码，二级管理员只能修改普通用户密码
 - **角色管理**：管理员可创建、修改和删除所有角色用户，二级管理员只能创建和管理普通用户
+- **并发安全**：使用 `sync.RWMutex` 保护用户配置的并发读写
 
 ### 📊 统计与监控功能
 - **下载统计**：精确记录每个文件的下载次数和最后下载时间
@@ -129,16 +294,15 @@
 为管理员提供直观的数据可视化功能，帮助了解文件分享和下载活动趋势：
 1. **活动趋势图**：使用Chart.js创建的柱状图，展示最近7天的文件分享和下载活动趋势
 2. **文件统计表**：详细的文件统计数据表格，包括文件路径、分享次数、下载次数、最后分享时间和最后下载时间
-3. **实时数据**：数据实时更新，反映最新的文件使用情况 
+3. **实时数据**：数据实时更新，反映最新的文件使用情况
 4. **管理员与二级管理员专享**：只有管理员和二级管理员角色可以访问，确保数据安全性
 
-热力图数据收集包括：
-- 文件分享事件
-- 文件下载事件
-- 用户上传事件
-- 管理员操作事件
-
-所有数据都会经过标准化处理，确保路径一致性，并且会定期合并重复条目以保持数据准确性。
+#### 监控告警系统
+- **系统监控**：实时监控 CPU、内存、磁盘使用率
+- **应用监控**：监控请求量、错误率、响应时间
+- **告警规则**：支持配置告警阈值，超过阈值自动触发告警
+- **告警级别**：支持 info、warning、critical 三种告警级别
+- **统一展示**：监控告警数据合并到服务器信息页面，统一展示
 
 ### 📱 全平台响应式设计
 - **6级媒体查询断点**：覆盖从超小手机(360px)到桌面端(1025px+)的所有设备
@@ -147,21 +311,82 @@
 - **横屏适配**：优化手机横屏模式的布局和可用性，提高大屏幕利用率
 - **可访问性支持**：支持用户缩放，确保不同用户的使用需求
 
+### 🎨 界面设计
+
+#### 前端用户界面
+- **现代简洁风格**：蓝白配色，清新美观
+- **Hero 区域**：渐变背景、大标题、搜索框、统计数据展示
+- **文件列表**：卡片式布局、文件图标、文件名、文件大小、下载按钮
+- **分类展示**：分类标签、分类筛选、分类图标
+- **分页设计**：页码导航、每页数量配置
+- **响应式设计**：适配桌面端和移动端
+
+#### 后端管理界面
+- **高级质感风格**：Stripe 风格，专业大气
+- **侧边栏导航**：图标+文字，清晰明了
+- **数据表格**：斑马纹、悬停效果、操作按钮
+- **表单设计**：统一的输入框、按钮、下拉框样式
+- **统计卡片**：数据展示、图标、颜色区分
+- **单页应用**：所有管理操作在右侧内容区展开，不跳转到单独页面
+
 ### 🛡️ 安全防护措施
-- **访问控制**：严格的权限验证和访问控制，防止未授权访问
-- **输入验证**：全面的输入参数验证和过滤，防止恶意输入
-- **文件校验**：上传文件的类型和大小限制，确保系统安全
-- **防注入攻击**：防范常见的Web攻击手段，保护系统安全
-- **路径安全**：严格的路径验证，防止目录遍历攻击
-- **会话管理**：
-  - 基于HttpOnly Cookie的安全会话机制
-  - 24小时会话自动过期
-  - 密码修改时自动失效相关会话
-  - 定期清理过期会话
-  - 会话中存储用户权限信息，减少权限检查开销
-- **密码安全**：密码哈希存储，防止密码泄露
-- **CSRF防护**：使用会话ID进行CSRF防护
-- **SSL支持**：支持HTTPS加密传输，保护数据安全
+
+#### 1. XSS 跨站脚本防护
+- **HTML编码**：对所有用户输入进行HTML实体编码
+- **HTML清理**：移除危险标签（script、style、iframe等）和事件处理属性
+- **URL验证**：验证和清理危险URL协议（javascript:、vbscript:等）
+- **属性安全**：对HTML属性值进行安全处理，防止属性注入
+- **全页面覆盖**：应用到文件列表、用户管理、日志页面、管理员界面等所有关键页面
+
+#### 2. CSRF 跨站请求伪造防护
+- **安全令牌**：使用 `crypto/rand` 生成32字节安全令牌
+- **常量时间比较**：防止时序攻击
+- **双渠道支持**：支持表单隐藏字段和AJAX请求头两种方式
+- **全操作覆盖**：应用到用户管理、文件操作、分类管理、下载任务API等所有关键操作
+- **公开接口豁免**：公开分享计数接口保持匿名豁免
+
+#### 3. 路径遍历防护
+- **8步严格验证**：清理路径、检查`..`、获取绝对路径、验证是否在基础目录内等
+- **全路径覆盖**：应用到文件下载、文件浏览等所有路径相关操作
+- **符号链接检查**：可选的符号链接目标验证
+
+#### 4. 访问控制
+- **严格的权限验证**：实时验证用户权限，防止未授权访问
+- **多角色支持**：管理员、二级管理员、普通用户、访客四种角色
+- **细粒度权限**：针对不同角色分配不同的操作权限
+
+#### 5. 会话管理
+- **HttpOnly Cookie**：防止XSS攻击窃取会话
+- **SameSite 属性**：防止CSRF攻击
+- **Secure 属性**：HTTPS时启用，保护数据安全
+- **24小时自动过期**：定期清理过期会话
+- **密码修改失效**：密码修改时自动失效相关会话
+- **安全会话ID**：使用 `crypto/rand` 生成安全的会话ID
+
+#### 6. 密码安全
+- **哈希存储**：密码哈希存储，防止密码泄露
+- **独立API Key自动生成**：首次启动服务器时自动生成随机API Key（64字符十六进制），不再直接比对管理员明文密码；已存在配置文件时不覆盖，仅在api_key为空时自动生成并备份原配置
+
+#### 7. 混合内容修复（HTTPS安全）
+- **协议自动识别**：新增 `GetRequestScheme()` 函数，优先检查 `X-Forwarded-Proto` 头，其次检查 `r.TLS`，自动识别HTTP/HTTPS
+- **图标URL修复**：文件列表图标URL、图标处理器URL统一使用当前请求协议，避免HTTPS页面中加载HTTP资源
+- **短链URL修复**：短链生成API的FullURL从硬编码 `http://` 改为动态获取当前协议，确保反向代理HTTPS环境下生成正确的HTTPS短链
+- **适用场景**：Nginx/Caddy/Traefik等反向代理HTTPS部署时，所有资源链接自动适配HTTPS，消除浏览器混合内容警告
+
+#### 8. 反向代理真实IP获取
+- **直接信任代理头**：`GetClientIP()` 函数直接检查 `X-Forwarded-For` 和 `X-Real-IP` 请求头，获取反向代理后的真实客户端IP
+- **多代理链支持**：正确解析 `X-Forwarded-For` 中的多个IP，取第一个为真实客户端IP
+- **日志记录准确**：用户登录、文件访问、下载等操作日志中记录真实IP，而非Docker网关或代理服务器IP
+- **适用场景**：Docker部署、Nginx反向代理、CDN等环境下，日志和统计中的IP地址准确反映真实访问者
+
+#### 9. 文件安全
+- **文件类型检查**：阻止危险文件上传
+- **文件大小限制**：根据用户角色设置不同的文件大小限制
+- **每日上传限制**：普通用户20GB/日上传限制
+
+#### 10. SSL支持
+- **HTTPS加密传输**：支持HTTPS加密传输，保护数据安全
+- **证书配置**：支持配置证书文件和私钥文件
 
 ### 📝 日志系统
 - **多级日志记录**：支持success、error、warning、debug和info五种日志级别
@@ -169,382 +394,371 @@
 - **日志筛选功能**：支持按日期和日志级别筛选日志
 - **日志持久化**：日志信息持久化存储，便于后续查询和分析
 - **结构化日志格式**：包含时间戳、级别、用户名、角色、操作和详情
-- **日志倒序显示**：最新日志显示在前面，方便查看
-- **智能滚动**：页面加载时自动滚动到顶部，确保看到最新日志
-- **历史日志回溯**：支持通过日期选择器查看特定日期的日志文件，便于回溯历史操作和系统事件
-  - 默认显示当天日志
-  - 通过日期选择器可选择任意历史日期
-  - 系统自动加载对应日期的日志文件
-  - 支持日志文件轮转，按日期命名（如：server_20251228.log）
-
-### 📊 服务器信息展示
-- **系统运行时间**：显示服务器已运行的时间
-- **当前时间**：显示服务器当前时间
-- **待审核文件数量**：实时显示待审核文件数量，方便管理员及时处理
-- **系统信息显示**：显示操作系统、架构、Go版本、CPU核心数等
-- **服务器配置显示**：显示端口、下载目录、待审核目录等
-- **项目信息显示**：显示项目名称、版本、开发者、启动时间等
-- **内存使用信息**：显示当前协程数
-- **用户角色权限表**：清晰展示不同角色的权限对比
-- **使用说明**：添加了系统使用说明
-
-## 📊 API统计接口
-
-系统提供RESTful API接口供第三方系统集成：
-- 获取所有文件的统计信息（JSON格式）
-- 数据包含下载次数、分享次数、带宽使用等详细信息
-- JSON格式返回，便于程序解析和处理
-- 支持API调用鉴权，仅管理员和二级管理员可以访问
-
-### 🔐 API鉴权说明
-
-#### 鉴权范围
-- **管理员**：可以完全访问所有API接口
-- **二级管理员**：可以完全访问所有API接口
-- **普通用户/访客**：无法访问API接口
-
-#### 访问方式
-1. **网页界面访问**：
-   - 已登录的管理员或二级管理员通过网页界面访问API接口时，无需额外鉴权
-   - 系统会自动通过会话信息验证用户身份和权限
-
-2. **其他渠道访问**（如curl、第三方工具等）：
-   - 需要通过Authorization请求头进行鉴权
-   - 鉴权值为管理员或二级管理员的密码
-   - 格式：`Authorization: <密码>`
-
-#### 第三方工具Authorization头验证说明
-
-"Authorization头验证"是一种HTTP请求认证方式，它允许第三方工具（如curl、Postman、脚本程序等）在发送HTTP请求时，通过请求头信息提供身份验证凭证。
-
-**通俗解释**：
-- 当您使用浏览器访问系统时，浏览器会自动保存登录信息（会话Cookie）
-- 但当您使用curl或其他命令行工具访问API时，这些工具不会自动保存登录信息
-- 因此需要手动在HTTP请求中添加一个名为"Authorization"的头部，并在其中填入您的管理员/二级管理员密码
-- 服务器会检查这个请求头中的密码是否正确，从而验证您的身份
-
-**使用场景**：
-- 编写自动化脚本定期获取统计信息
-- 使用监控工具跟踪系统状态
-- 与其他系统进行集成对接
-- 开发自定义客户端工具
-
-### 🛡️ 安全防护说明
-
-系统针对API访问实现了严格的安全防护机制：
-
-**核心防护措施**：
-- **IP级限制**：单个IP默认最多允许5次失败验证尝试
-- **自动封禁机制**：超过失败阈值后，IP将被自动封禁5分钟
-- **智能计数管理**：封禁期结束后保留失败记录，防止重复攻击
-- **IPv6完整支持**：正确处理所有IP类型，确保防护无死角
-
-**安全建议**：
-- 使用强密码（包含大小写字母、数字和特殊字符）
-- 定期更换密码
-- 避免使用与其他系统相同的密码
-
-### 🔄 数据处理机制
-- **自动去重**：自动合并重复统计条目，确保数据准确性
-- **数据清理**：定期清理任务，保持统计数据的一致性
-- **路径识别**：支持子目录文件路径的正确识别和统计
-- **持久化存储**：数据持久化存储到本地文件，重启服务后数据不丢失
-
-## 🐳 Docker部署方案
-
-### 1. 多架构镜像支持
-系统提供多架构 Docker 镜像，支持不同平台的部署：
-
-| 架构 | 标签 | 适用平台 |
-|------|------|----------|
-| X86_64 | `latest` | 大多数服务器和桌面电脑 |
-| ARM64 | `latest-arm64` | 树莓派 4、苹果 M 系列芯片、ARM 服务器等 |
-
-### 2. 常规Docker部署
-
-#### X86_64 架构部署
-```yaml
-version: '3.8'
-services:
-  go-download-server:
-    # Docker Hub镜像
-    image: gomail1/go_downloader:latest
-    # 备选镜像源：GitHub Container Registry
-    # image: ghcr.io/gomail1/go-download:latest
-    container_name: go-download-server
-    restart: unless-stopped
-    ports:
-      - "9980:9980"
-      - "1443:1443"
-    volumes:
-      - ./downloads:/app/downloads
-      - ./pending:/app/pending
-      - ./logs:/app/logs
-      - ./config:/app/config
-      - ./ssl:/app/ssl
-    environment:
-      - TZ=Asia/Shanghai
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-```
-
-#### ARM64 架构部署
-```yaml
-version: '3.8'
-services:
-  go-download-server:
-    # Docker Hub镜像
-    image: gomail1/go_downloader:latest-arm64
-    # 备选镜像源：GitHub Container Registry
-    # image: ghcr.io/gomail1/go-download:latest-arm64
-    container_name: go-download-server
-    restart: unless-stopped
-    ports:
-      - "9980:9980"
-      - "1443:1443"
-    volumes:
-      - ./downloads:/app/downloads
-      - ./pending:/app/pending
-      - ./logs:/app/logs
-      - ./config:/app/config
-      - ./ssl:/app/ssl
-    environment:
-      - TZ=Asia/Shanghai
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-```
-
-### 3. 飞牛专用部署
-
-#### X86_64 架构部署
-```yaml
-version: '3.8'
-services:
-  go-download-server:
-    image: gomail1/go_downloader:latest
-    container_name: go-download-server
-    restart: unless-stopped
-    ports:
-      - "9980:9980"
-      - "1443:1443"
-    volumes:
-      - /vol1/1000/docker/go-download/downloads:/app/downloads
-      - /vol1/1000/docker/go-download/pending:/app/pending
-      - /vol1/1000/docker/go-download/logs:/app/logs
-      - /vol1/1000/docker/go-download/config:/app/config
-      - /vol1/1000/docker/go-download/ssl:/app/ssl
-    environment:
-      - TZ=Asia/Shanghai
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-```
-
-#### ARM64 架构部署
-```yaml
-version: '3.8'
-services:
-  go-download-server:
-    image: gomail1/go_downloader:latest-arm64
-    container_name: go-download-server
-    restart: unless-stopped
-    ports:
-      - "9980:9980"
-      - "1443:1443"
-    volumes:
-      - /vol1/1000/docker/go-download/downloads:/app/downloads
-      - /vol1/1000/docker/go-download/pending:/app/pending
-      - /vol1/1000/docker/go-download/logs:/app/logs
-      - /vol1/1000/docker/go-download/config:/app/config
-      - /vol1/1000/docker/go-download/ssl:/app/ssl
-    environment:
-      - TZ=Asia/Shanghai
-    logging:
-      driver: json-file
-      options:
-        max-size: "10m"
-        max-file: "3"
-```
-
+- **IP记录**：记录用户IP地址，支持IPv4和IPv6
+- **日志管理**：支持日志查询、日志清理、日志级别配置
 
 ## 🚀 快速开始
 
-### 1. 访问系统
-- **HTTP地址**: http://服务器IP:9980
-- **HTTPS地址**: https://服务器IP:1443
-- **默认管理员账号**: admin / admin123
+### 环境要求
+- Go 1.21+
+- 支持的操作系统：Windows、Linux、macOS
 
-## 🎬 操作界面演示 (V0.0.3)
+### 安装
 
-以下是系统主要功能的操作界面演示：
+#### 方式一：从源码编译
+```bash
+# 克隆仓库
+git clone https://github.com/gomail1/go-download.git
+cd go-download
 
-### 1. 公众主界面
-![公众主界面](https://github.com/gomail1/go-download/raw/main/操作演示/1公众主界面.png)
+# 编译
+go build -o go-download .
 
-### 2. 上传界面
-![上传界面](https://github.com/gomail1/go-download/raw/main/操作演示/2上传.png)
+# 运行
+./go-download
+```
 
-### 3. 管理员界面
-![管理员界面](https://github.com/gomail1/go-download/raw/main/操作演示/3管理员.png)
+#### 方式二：使用 Docker
+```bash
+# 拉取镜像
+docker pull gomail1/go_downloader:latest
 
-### 4. 创建目录
-![创建目录](https://github.com/gomail1/go-download/raw/main/操作演示/4创建目录.png)
+# 运行容器
+docker run -d \
+  -p 9980:9980 \
+  -v /path/to/downloads:/app/downloads \
+  -v /path/to/config:/app/config \
+  --name go-download \
+  gomail1/go_downloader:latest
+```
 
-### 5. 用户上传界面
-![用户上传界面](https://github.com/gomail1/go-download/raw/main/操作演示/5用户上传界面.png)
+### 配置
+首次运行会自动生成默认配置文件 `config/config.json`，可以根据需要修改配置。
 
-### 6. 管理员审核提醒
-![管理员审核提醒](https://github.com/gomail1/go-download/raw/main/操作演示/6管理员审核提醒.png)
+#### 配置文件结构
+```json
+{
+  "users": [
+    {
+      "username": "admin",
+      "password": "admin123",
+      "role": "admin",
+      "max_file_size": 0
+    }
+  ],
+  "server": {
+    "port": 9980,
+    "https_port": 1443,
+    "cert_file": "",
+    "key_file": "",
+    "download_dir": "downloads",
+    "pending_dir": "pending",
+    "log_dir": "logs",
+    "trust_proxy": false,
+    "api_key": "",
+    "server_name": "Go下载站"
+  },
+  "legal": {
+    "terms_enabled": true,
+    "terms_version": "1.0",
+    "terms_content": "免责协议内容...",
+    "footer_text": "© 2026 Go下载站",
+    "browser_tips": "推荐使用Chrome、Firefox、Edge等现代浏览器"
+  }
+}
+```
 
-### 7. 管理员审核目录
-![管理员审核目录](https://github.com/gomail1/go-download/raw/main/操作演示/7管理员审核目录.png)
+#### 配置项说明
 
-### 8. 用户管理界面
-![用户管理界面](https://github.com/gomail1/go-download/raw/main/操作演示/8用户管理界面.png)
+##### 用户配置 (users)
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| username | 用户名 | - |
+| password | 密码（哈希存储） | - |
+| role | 角色（admin/subadmin/normal） | - |
+| max_file_size | 最大文件大小（字节，0表示无限制） | 0 |
 
-### 9. 详细日志
-![详细日志](https://github.com/gomail1/go-download/raw/main/操作演示/9详细日志.png)
+##### 服务器配置 (server)
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| port | HTTP端口 | 9980 |
+| https_port | HTTPS端口 | 1443 |
+| cert_file | SSL证书文件路径 | - |
+| key_file | SSL私钥文件路径 | - |
+| download_dir | 下载目录 | downloads |
+| pending_dir | 待审核目录 | pending |
+| log_dir | 日志目录 | logs |
+| trust_proxy | 是否信任反向代理（X-Forwarded-For） | false |
+| api_key | API密钥（可选） | - |
+| server_name | 服务器名称 | Go下载站 |
 
-### 10. 服务器信息
-![服务器信息](https://github.com/gomail1/go-download/raw/main/操作演示/10服务器信息.png)
+##### 法律配置 (legal)
+| 配置项 | 说明 | 默认值 |
+|--------|------|--------|
+| terms_enabled | 是否启用免责协议 | true |
+| terms_version | 免责协议版本 | 1.0 |
+| terms_content | 免责协议内容 | - |
+| footer_text | 页脚文字 | © 2026 Go下载站 |
+| browser_tips | 浏览器提示 | - |
 
-### 11. 热力图统计面板
-![热力图统计面板](https://github.com/gomail1/go-download/raw/main/操作演示/11热力图统计面板.png)
+### 默认账号
+- 管理员：admin / admin123（首次登录后请修改密码）
 
-## 🔧 技术实现
+### 访问
+- 前端首页：http://localhost:9980
+- 登录页面：http://localhost:9980/login
+- 管理后台：http://localhost:9980/admin
 
-### 核心架构
-- **纯Go实现**: 使用Go标准库开发，无需额外的数据库依赖
-- **模块化设计**: 清晰的分层架构（config、constants、handlers等模块）
-- **高性能**: 利用Go的并发特性，支持高并发请求处理
-- **多协议集成**: 当前版本支持 HTTP/HTTPS 下载协议
+## 📡 API 文档
 
-### 配置管理
-- **自动配置**: 首次运行自动生成config.json配置文件
-- **命令行参数**: 支持通过命令行参数覆盖配置（端口、证书文件等）
-- **环境变量支持**: 支持通过环境变量配置服务器参数
-- **默认配置**: 内置默认配置，确保服务能快速启动
-- **配置集成**: 统一管理配置文件，优化配置结构
-  - 多协议下载配置
-  - 随机端口设置
-  - 日志级别配置
-  - 免责协议配置
+### 公开接口
 
-### 服务器特性
-- **容器化部署**: 使用Docker容器化技术，简化部署和管理
-- **跨平台支持**: 支持Windows、Linux和Mac系统
-- **双协议支持**: 同时支持HTTP和HTTPS访问
-- **持久化存储**: 支持数据持久化到主机文件系统
-- **并发处理**: 利用Go的goroutine特性，支持高并发文件传输
-- **自动目录创建**: 自动创建必要的目录结构（downloads、pending、logs等）
-- **子用户自动创建**: 系统初始化时自动创建 `download-user` 子用户，用于接收下载任务文件
+#### 获取统计信息
+```
+GET /api/stats
+```
+返回文件下载和分享统计信息。
 
-### 启动流程
-1. 解析命令行参数和环境变量
-2. 加载配置文件（如不存在则使用默认配置）
-3. 初始化必要的目录结构
-4. 自动创建 `download-user` 子用户
-5. 初始化下载引擎
-6. 注册HTTP处理函数
-7. 启动HTTP服务器
-8. 启动HTTPS服务器（如果证书存在）
+#### 增加分享计数
+```
+POST /api/increment-share?path=文件路径
+```
+匿名可用，增加文件的分享计数。
 
-### 命令行参数
-- `-port`: 指定HTTP端口（默认：9980）
-- `-https-port`: 指定HTTPS端口（默认：1443）
-- `-cert-file`: 指定SSL证书文件路径
-- `-key-file`: 指定SSL密钥文件路径
+#### 获取分类列表
+```
+GET /api/categories
+```
+返回所有文件分类。
 
-### 环境变量
-- `PORT`: 设置HTTP端口
-- `HTTPS_PORT`: 设置HTTPS端口
-- `SSL_CERT_FILE`: 设置SSL证书文件路径
-- `SSL_KEY_FILE`: 设置SSL密钥文件路径
-- `TZ`: 设置时区（如Asia/Shanghai）
+#### 获取自定义排序
+```
+GET /api/get-custom-sort?path=目录路径
+```
+返回指定目录的文件自定义排序。
 
-### 下载引擎集成详情
-- **代码集成**: 核心代码作为内部包使用，实现多协议下载功能
-- **API 路由集成**: 注册下载引擎 API 路由，统一路由管理
-- **日志整合**: 将下载引擎日志整合到现有日志系统中，统一日志格式和存储位置
-- **UI 统一**: 将下载功能集成到现有 Web 界面中，保持 UI 风格一致
-- **审核机制集成**: 将子用户下载文件接入现有审核流程
+### 需要鉴权的接口
 
-## 📝 开发说明
+所有需要鉴权的接口都需要：
+1. 登录会话（Cookie）
+2. CSRF令牌（请求头 `X-CSRF-Token` 或表单字段 `csrf_token`）
 
-此项目使用纯Go标准库开发，无需额外的数据库依赖。所有文件操作都是直接文件系统操作，适合中小型文件分享场景。系统架构清晰，代码结构模块化，便于维护和扩展。
+#### 文件操作
+```
+POST /delete          # 删除文件
+POST /batch-delete    # 批量删除文件
+POST /batch-move      # 批量移动文件
+POST /batch-copy      # 批量复制文件
+POST /mkdir           # 创建目录
+POST /upload          # 上传文件
+```
 
-## ❓ 常见问题解答
+#### 用户管理
+```
+POST /add-user        # 添加用户
+POST /change-password # 修改密码
+POST /delete-user     # 删除用户
+```
 
-### 1. Q: 如何修改默认端口和证书文件路径？
-   A: 可以通过命令行参数或环境变量来修改：
-   ```bash
-   # 命令行参数
-   ./go-download-server -port 8080 -https-port 8443 -cert-file /path/to/cert.crt -key-file /path/to/key.key
-   
-   # 或环境变量
-   PORT=8080 HTTPS_PORT=8443 ./go-download-server
-   ```
+#### 分类管理
+```
+POST   /api/categories          # 创建分类
+PUT    /api/categories/:id      # 更新分类
+DELETE /api/categories/:id      # 删除分类
+POST   /api/file-category        # 设置文件分类
+```
 
-### 2. Q: 如何重置管理员密码？
-   A: 删除`config/config.json`文件中的相关用户条目，系统将在重启后自动生成默认管理员账户。
+#### 下载任务管理（Gin路由）
+```
+GET    /api/tasks              # 获取任务列表
+POST   /api/tasks              # 创建任务
+POST   /api/tasks/upload       # 上传种子文件
+GET    /api/tasks/:id          # 获取任务详情
+PUT    /api/tasks/:id/pause    # 暂停任务
+PUT    /api/tasks/:id/resume   # 恢复任务
+DELETE /api/tasks/:id          # 删除任务
+GET    /api/stats              # 获取统计信息
+GET    /ws/events              # WebSocket实时推送
+```
 
-### 3. Q: 如何限制上传文件的大小？
-   A: 在`config/config.json`中修改`max_upload_size`参数（单位：字节）。
+#### 审核管理
+```
+POST /approve  # 审核通过
+POST /reject   # 审核拒绝
+```
 
-### 4. Q: 上传的文件存放在哪里？
-   A: 文件存放在`downloads`目录中，待审核文件存放在`pending/[用户名]/`目录中。
+#### 保存自定义排序
+```
+POST /api/save-custom-sort
+```
 
-### 5. Q: 如何获取API统计数据？
-   A: 访问`/api/stats`接口获取JSON格式的统计数据。
+## 📁 项目结构
 
-### 6. Q: Docker容器重启后数据会丢失吗？
-   A: 不会，只要正确映射了volumes卷，数据会持久化到主机文件系统。
+```
+go-download/
+├── main.go                    # 主程序入口
+├── middleware.go              # 中间件（Gzip、缓存、安全头）
+├── config/                    # 配置管理
+│   └── config.go             # 配置结构体和加载逻辑
+├── constants/                 # 常量定义
+│   └── constants.go          # 角色、权限等常量
+├── session/                   # 会话管理
+│   └── session.go            # 会话创建、验证、清理
+├── handlers/                  # HTTP处理器
+│   ├── files.go              # 文件列表、浏览、搜索
+│   ├── download.go           # 文件下载
+│   ├── upload.go             # 文件上传
+│   ├── delete.go             # 文件删除
+│   ├── mkdir.go              # 创建目录
+│   ├── login.go              # 登录登出
+│   ├── admin.go              # 管理后台
+│   ├── user.go               # 用户管理
+│   ├── logs.go               # 日志查看
+│   ├── info.go               # 服务器信息
+│   ├── heatmap.go            # 热力图统计
+│   ├── review.go             # 审核管理
+│   ├── approve.go            # 审核通过
+│   ├── reject.go             # 审核拒绝
+│   ├── terms.go              # 免责协议
+│   ├── stats.go              # 统计API
+│   ├── category_handler.go   # 分类管理API
+│   ├── download_management.go # 下载管理页面
+│   └── daily_upload.go       # 每日上传统计
+├── internal/                  # 内部模块
+│   ├── api/                   # 下载任务API（Gin）
+│   │   ├── server.go         # API服务器
+│   │   ├── handlers.go       # API处理器
+│   │   ├── middleware.go     # API中间件（鉴权、CSRF）
+│   │   └── websocket.go      # WebSocket推送
+│   ├── core/                  # 下载引擎核心
+│   │   ├── engine.go         # 下载引擎
+│   │   ├── models.go         # 数据模型
+│   │   ├── protocol.go       # 协议接口
+│   │   ├── protocol_manager.go # 协议管理器
+│   │   ├── persistence.go    # 持久化
+│   │   ├── chunk_strategy.go # 分块策略
+│   │   └── resource_controller.go # 资源控制器
+│   ├── config/                # 下载引擎配置
+│   ├── event/                 # 事件系统
+│   ├── logger/                # 日志系统
+│   └── tui/                   # 终端UI
+├── protocols/                 # 下载协议实现
+│   ├── httpx/                 # HTTP/HTTPS协议
+│   ├── bt/                    # BitTorrent协议
+│   ├── ftp/                   # FTP协议
+│   └── ed2k/                  # eDonkey2000协议
+├── utils/                     # 工具函数
+│   ├── utils.go              # 通用工具函数
+│   ├── xss.go                # XSS防护工具
+│   ├── csrf.go               # CSRF防护工具
+│   ├── path_security.go      # 路径安全验证
+│   ├── monitor.go            # 监控告警
+│   ├── monitor_disk_windows.go # Windows磁盘监控
+│   ├── monitor_disk_unix.go  # Linux/Mac磁盘监控
+│   ├── log_management.go     # 日志管理
+│   ├── shorturl.go           # 短链接管理
+│   ├── category.go           # 分类管理
+│   └── security_test.go      # 安全工具测试
+├── static/                    # 静态资源
+│   ├── styles.css            # 样式文件
+│   └── js/                   # JavaScript文件
+│       └── csrf.js           # CSRF令牌自动携带
+├── config/                    # 配置文件目录
+│   ├── config.json           # 主配置文件
+│   ├── shorturls.json        # 短链接数据
+│   ├── categories.json       # 分类数据
+│   └── sort.json             # 自定义排序数据
+├── downloads/                 # 下载文件目录
+├── pending/                   # 待审核文件目录
+├── logs/                      # 日志目录
+├── CODE_STYLE.md             # 代码风格指南
+├── README.md                  # 项目说明文档
+└── go.mod                     # Go模块定义
+```
 
-### 7. Q: 如何设置自动备份？
-   A: 目前系统没有内置备份功能，建议通过系统层面的定时任务备份`downloads`和`config`目录。
+## 🛠️ 技术栈
 
-### 8. Q: 系统支持中文文件名吗？
-   A: 完全支持，系统内部使用UTF-8编码处理所有文件路径和名称。
+### 后端技术
+- **后端语言**：Go 1.25+
+- **Web框架**：标准库 `net/http`（主服务）+ Gin（下载任务API）
+- **数据库**：JSON文件存储（无需外部数据库，轻量级部署）
+- **WebSocket**：`github.com/gorilla/websocket`（实时推送下载进度）
+- **日志库**：`github.com/sirupsen/logrus`（结构化日志）
+- **配置管理**：`github.com/spf13/viper`（灵活的配置管理）
+- **文件系统监控**：`github.com/fsnotify/fsnotify`（文件变更监控）
+- **加密库**：`golang.org/x/crypto`（密码哈希、安全加密）
+- **TUI框架**：`github.com/charmbracelet/bubbletea` + `bubbles`（终端用户界面）
 
-### 9. Q: 系统支持哪些下载协议？
-    A: 系统当前版本支持 HTTP/HTTPS 协议的下载功能。
+### 前端技术
+- **前端**：原生 HTML + CSS + JavaScript（无框架依赖，轻量级）
+- **图表库**：Chart.js（本地部署，无外部CDN依赖）
+- **响应式设计**：6级媒体查询断点，适配桌面端和移动端
+- **全平台支持**：Windows、Linux、macOS、Android、iOS
 
-### 10. Q: 如何使用多协议下载功能？
-    A: 登录系统后，在导航菜单中点击"下载管理" → "新建下载"，填写下载链接和相关配置，点击"开始下载"即可。
+### 下载协议
+- **HTTP/HTTPS**：标准库实现，支持多线程加速与断点续传
+- **BitTorrent**：`github.com/anacrolix/torrent`，支持磁力链接与种子文件
+- **FTP**：标准库实现，PASV被动模式 + RETR流式拉取
+- **eDonkey2000 (ED2K)**：原生实现，含ed2k哈希分片校验、服务器源发现、zlib解压
 
-### 11. Q: 为什么下载的文件需要审核？
-    A: 为了保证系统安全，所有通过系统下载的文件默认归属于 `download-user` 子用户，自动进入待审核队列，需要管理员审核后才能发布到前端界面。
+### 安全防护
+- **XSS跨站脚本防护**：自定义实现，HTML编码、危险标签清理、URL验证
+- **CSRF跨站请求伪造防护**：自定义实现，基于会话ID的令牌机制
+- **路径遍历防护**：自定义实现，8步严格验证
+- **会话管理**：HttpOnly、SameSite、Secure属性，24小时自动过期
+- **密码安全**：哈希存储，独立API Key支持
 
-### 12. Q: 如何修改 BitTorrent 端口？
-    A: 可以在系统设置页面中修改 BitTorrent 端口，支持手动输入或生成随机端口。
+### 监控与运维
+- **系统监控**：自定义实现，CPU、内存、磁盘使用率实时监控
+- **跨平台磁盘监控**：条件编译，Windows使用GetDiskFreeSpaceExW，Linux/Mac使用syscall.Statfs
+- **告警系统**：支持配置告警阈值，超过阈值自动触发告警
+- **Gzip压缩**：中间件实现，压缩HTML、CSS、JavaScript等文本资源
+- **静态资源缓存**：根据文件扩展名设置不同缓存时间
+- **容器化**：Docker支持，一键部署
 
-### 13. Q: 是否首次登录需要同意免责协议？
-    A: 为了明确用户使用系统的责任和义务，系统要求首次登录的用户必须同意免责协议。同意后，后续登录无需再次确认。
+### 测试与质量
+- **测试框架**：标准库 `testing`
+- **测试覆盖**：安全工具、路径验证、CSRF防护、XSS防护、短链安全、ED2K协议等
+- **代码风格**：`CODE_STYLE.md` 规范，统一代码风格
+- **并发安全**：`sync.RWMutex` 保护共享数据，原子写配置文件
 
-### 14. Q: 如何查看下载任务的详细信息？
-    A: 在下载任务列表页面中，点击任务的"查看"按钮，即可进入任务详情页面，查看完整的任务信息。
+## 🧪 测试
 
-### 15. Q: 下载任务支持断点续传吗？
-    A: 是的，系统支持断点续传功能，当下载中断后，可以恢复下载进度。
+运行所有测试：
+```bash
+go test ./...
+```
+
+运行指定包的测试：
+```bash
+go test ./utils/...
+go test ./handlers/...
+go test ./protocols/ed2k/...
+```
 
 ## 🤝 贡献指南
 
-欢迎参与项目开发！如果您想为该项目贡献代码或报告问题
+欢迎提交 Issue 和 Pull Request！
 
-免责声明（DISCLAIMER）
-1. 本项目仅为技术学习与交流目的提供，开发者不对项目的可用性、稳定性、安全性做任何明示或暗示的保证。
-2. 用户使用本项目时，应严格遵守所在地区法律法规，不得用于存储、传播任何违法、侵权、色情等违规内容。因用户不当使用导致的一切法律责任，均由用户自行承担，与开发者无关。
-3. 对于使用本项目过程中可能出现的数据丢失、文件损坏、服务器故障等问题，开发者不承担任何直接或间接的赔偿责任。
-4. 请用户自行做好数据备份、安全防护等措施，谨慎使用本项目。
+
+### 提交规范
+- feat: 新功能
+- fix: 修复bug
+- docs: 文档更新
+- style: 代码格式调整
+- refactor: 代码重构
+- test: 测试相关
+- chore: 构建/工具/依赖相关
 
 ## 📄 许可证
 
-MIT License
+本项目采用 MIT 许可证，详见 LICENSE 文件。
+
+## 📞 联系方式
+
+- GitHub Issues：[https://github.com/gomail1/go-download/issues](https://github.com/gomail1/go-download/issues)
+- Docker Hub：[https://hub.docker.com/r/gomail1/go_downloader](https://hub.docker.com/r/gomail1/go_downloader)
+
+---
+
+**注意**：本项目仅供学习和研究使用，请遵守当地法律法规，不要用于非法用途。
