@@ -1,0 +1,69 @@
+# Go编译生成的文件
+# 注意：go-download-server 不忽略，因为轻量级构建(Dockerfile.light)需要复制它
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+go-download-test.exe
+
+# 构建脚本和Dockerfile（不需要包含在镜像中）
+build-docker.bat
+build-docker.sh
+Dockerfile
+Dockerfile.light
+
+# 依赖目录
+vendor/
+
+# 数据目录（运行时生成，通过volume挂载）
+data/
+
+# 测试目录
+test_icons/
+test/
+tests/
+
+# 配置文件（运行时通过volume挂载）
+config/config.json
+config/daily_upload.json
+config/sort.json
+config/stats.json
+config/shorturls.json
+config/icons/
+
+# 日志文件
+logs/
+*.log
+
+# 下载目录
+downloads/
+
+# 待审核目录
+pending/
+
+# SSL证书目录
+ssl/
+
+# 编辑器文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 系统文件
+.DS_Store
+Thumbs.db
+
+# 构建文件
+build/
+
+# Git目录
+.git/
+.gitignore
+.dockerignore
+
+# 文档和演示文件
+*.md
+操作演示/

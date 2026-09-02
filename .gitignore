@@ -1,0 +1,53 @@
+# 忽略Go编译生成的文件
+go-download-server
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# 忽略依赖目录
+vendor/
+
+# 忽略配置文件
+config/config.json
+config/daily_upload.json
+config/sort.json
+config/stats.json
+config/shorturls.json
+
+# 忽略图标缓存目录
+config/icons/
+
+# 运行测试时在各包目录下产生的临时配置目录
+handlers/config/
+utils/config/
+
+# 忽略日志文件
+logs/
+
+# 忽略下载目录
+downloads/
+
+# 忽略待审核目录
+pending/
+
+# 忽略SSL证书目录
+ssl/
+
+# 忽略编辑器文件
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 忽略系统文件
+.DS_Store
+Thumbs.db
+
+# 忽略构建文件
+build/
+
+# 忽略根目录日志与临时测试产物
+*.log

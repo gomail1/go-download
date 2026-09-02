@@ -1,0 +1,48 @@
+# ============================================
+# Go 下载站 - 轻量级Dockerfile（先打包二进制再构建）
+# ============================================
+# 使用方式：
+# 1. 先在本地编译Linux二进制：
+#    Windows PowerShell:
+#      $env:GOOS="linux"; $env:GOARCH="amd64"; go build -ldflags="-s -w" -o go-download-server ./
+#    Linux/Mac:
+#      GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o go-download-server ./
+#
+# 2. 构建Docker镜像：
+#    docker build -f Dockerfile.light -t go-download:latest .
+#
+# 优点：构建速度快，Dockerfile简单
+# 缺点：需要本地Go环境，需要手动交叉编译
+# ============================================
+
+# 使用轻量级Alpine镜像
+FROM alpine:latest
+
+# 设置工作目录
+WORKDIR /app
+
+# 更新系统包，修复漏洞，安装必要的运行时依赖
+RUN apk update && apk upgrade --no-cache && \
+    apk add --no-cache ca-certificates tzdata && \
+    cp /usr/share/zoneinfo/Asia/Shanghai /etc/localtime && \
+    echo "Asia/Shanghai" > /etc/timezone && \
+    rm -rf /var/cache/apk/*
+
+# 复制预编译的二进制文件（需要先在本地编译）
+# 注意：二进制必须是Linux amd64架构
+COPY go-download-server ./
+
+# 复制static目录内容
+COPY static ./static
+
+# 注意：所有运行时目录（config, downloads, pending, logs, ssl, data, config/icons/cache）
+# 都会由代码自动创建（os.MkdirAll），无需在这里创建
+
+# 设置环境变量
+ENV TZ=Asia/Shanghai
+
+# 暴露端口
+EXPOSE 9980 1443
+
+# 启动应用程序
+CMD ["./go-download-server"]
