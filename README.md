@@ -4,6 +4,7 @@
 
 **GitHub仓库链接**: [https://github.com/gomail1/go-download](https://github.com/gomail1/go-download)
 **Docker仓库链接**: [https://hub.docker.com/r/gomail1/go_downloader](https://hub.docker.com/r/gomail1/go_downloader)
+**演示链接**: [https://go.dansg.xyz/](https://go.dansg.xyz/)
 
 ## 📢 最新更新
 
