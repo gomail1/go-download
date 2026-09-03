@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"go-download-server/internal/core"
+	"go-download-server/internal/logger"
 )
 
 // FTPProtocol implements the core.Protocol interface for FTP
@@ -104,9 +105,16 @@ func (f *FTPProtocol) Download(ctx context.Context, task *core.Task, progress ch
 		return err
 	}
 
-	// Create destination file
+	// Create destination file (不使用O_TRUNC，支持断点续传)
 	destPath := task.Config.SavePath + "/" + task.Metadata.Filename
-	file, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	logger.Infof("Creating destination file: %s", destPath)
+
+	// 确保目录存在
+	if err := os.MkdirAll(task.Config.SavePath, 0755); err != nil {
+		return err
+	}
+
+	file, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		return err
 	}
@@ -350,9 +358,24 @@ func (f *FTPProtocol) getFileSize(path string) (int64, error) {
 }
 
 // startDownload 通过 PASV 模式建立数据连接，真实地从 FTP 服务器拉取文件。
-// 流程：PASV 取被动端口 -> RETR 请求文件 -> 读控制通道 1xx 预备响应 ->
+// 流程：PASV 取被动端口 -> (可选) REST 设置偏移 -> RETR 请求文件 -> 读控制通道 1xx 预备响应 ->
 // 从数据连接流式写入本地文件 -> 读控制通道 226 收尾响应。
 func (f *FTPProtocol) startDownload(ctx context.Context, path string, file *os.File, task *core.Task, progress chan<- core.Progress, startTime time.Time) error {
+	// 检查本地文件已下载的大小（支持断点续传）
+	var resumeOffset int64 = 0
+	fileInfo, err := file.Stat()
+	if err == nil && fileInfo.Size() > 0 {
+		// 如果文件大小小于目标文件大小，从文件末尾继续下载
+		if task.Metadata.Size > 0 && fileInfo.Size() < task.Metadata.Size {
+			resumeOffset = fileInfo.Size()
+			logger.Infof("FTP断点续传: 已下载 %d/%d 字节, 从位置 %d 继续", resumeOffset, task.Metadata.Size, resumeOffset)
+		} else if task.Metadata.Size <= 0 {
+			// 文件大小未知时，不支持断点续传，重新下载
+			logger.Infof("FTP文件大小未知，重新下载")
+			file.Truncate(0)
+		}
+	}
+
 	// 1) 建立被动数据连接（必须在 RETR 之前）
 	dataConn, err := f.openPassiveDataConn()
 	if err != nil {
@@ -360,7 +383,26 @@ func (f *FTPProtocol) startDownload(ctx context.Context, path string, file *os.F
 	}
 	defer dataConn.Close()
 
-	// 2) 发送 RETR 请求文件
+	// 2) 如果需要断点续传，发送 REST 命令设置偏移量
+	if resumeOffset > 0 {
+		if _, err = f.client.Cmd("REST %d", resumeOffset); err != nil {
+			logger.Warnf("REST 命令失败，将从头下载: %v", err)
+			resumeOffset = 0
+		} else {
+			restResp, err := f.client.ReadLine()
+			if err != nil {
+				logger.Warnf("REST 响应错误，将从头下载: %v", err)
+				resumeOffset = 0
+			} else if !strings.HasPrefix(restResp, "3") {
+				logger.Warnf("REST 命令被拒绝，将从头下载: %s", restResp)
+				resumeOffset = 0
+			} else {
+				logger.Infof("FTP断点续传: REST 命令成功，从 %d 字节开始", resumeOffset)
+			}
+		}
+	}
+
+	// 3) 发送 RETR 请求文件
 	if _, err = f.client.Cmd("RETR %s", path); err != nil {
 		return fmt.Errorf("RETR 命令错误: %s", err)
 	}
@@ -375,7 +417,8 @@ func (f *FTPProtocol) startDownload(ctx context.Context, path string, file *os.F
 
 	// 3) 从数据连接流式写入本地文件
 	totalSize := task.Metadata.Size
-	var downloaded int64
+	// 支持断点续传：已下载字节数从resumeOffset开始
+	var downloaded int64 = resumeOffset
 	buf := make([]byte, 32*1024)
 
 	progressTicker := time.NewTicker(500 * time.Millisecond)
@@ -401,7 +444,8 @@ func (f *FTPProtocol) startDownload(ctx context.Context, path string, file *os.F
 
 		n, readErr := dataConn.Read(buf)
 		if n > 0 {
-			if _, werr := file.Write(buf[:n]); werr != nil {
+			// 使用WriteAt从指定位置写入（支持断点续传）
+			if _, werr := file.WriteAt(buf[:n], downloaded); werr != nil {
 				return fmt.Errorf("写入文件错误: %s", werr)
 			}
 			downloaded += int64(n)

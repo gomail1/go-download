@@ -266,6 +266,87 @@ body.v2 {
   padding: 4px 8px;
 }
 
+/* 现代化面包屑导航 - 简洁风格 */
+.v2 .breadcrumb-v2 {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  margin-bottom: 16px;
+  flex-wrap: wrap;
+  padding: 0;
+  background: transparent;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+}
+
+.v2 .breadcrumb-home {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--v2-text-secondary);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.v2 .breadcrumb-home:hover {
+  background: var(--v2-bg-elev);
+  color: var(--v2-primary);
+}
+
+.v2 .breadcrumb-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--v2-text-secondary);
+  text-decoration: none;
+  font-weight: 500;
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 6px;
+  transition: all 0.15s ease;
+}
+
+.v2 .breadcrumb-link:hover {
+  background: var(--v2-bg-elev);
+  color: var(--v2-primary);
+}
+
+.v2 .breadcrumb-current {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--v2-text);
+  font-weight: 600;
+  font-size: 13px;
+  padding: 6px 10px;
+  background: transparent;
+  border-radius: 6px;
+  max-width: 300px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.v2 .breadcrumb-separator {
+  display: inline-flex;
+  align-items: center;
+  color: var(--v2-text-muted);
+  opacity: 0.4;
+  font-size: 12px;
+}
+
+.v2 .breadcrumb-home-active {
+  color: var(--v2-text) !important;
+  font-weight: 600 !important;
+  background: transparent !important;
+  box-shadow: none !important;
+}
+
 /* 工具栏（批量操作） */
 .v2 .toolbar-v2 {
   display: flex;

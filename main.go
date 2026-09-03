@@ -20,7 +20,6 @@ import (
 	"go-download-server/internal/event"
 	"go-download-server/internal/logger"
 	"go-download-server/protocols/bt"
-	"go-download-server/protocols/ed2k"
 	"go-download-server/protocols/ftp"
 	"go-download-server/protocols/httpx"
 	"go-download-server/session"
@@ -142,8 +141,6 @@ func main() {
 	protocolMgr.RegisterProtocol("magnet", func() core.Protocol { return bt.NewBTProtocol() })
 	// FTP 下载：PASV + RETR 真实拉取（仅明文 ftp://，未实现 FTPS/TLS）
 	protocolMgr.RegisterProtocol("ftp", func() core.Protocol { return ftp.NewFTPProtocol() })
-	// ED2K 下载：真实 eDonkey2000 客户端（服务器登录 + 来源发现 + 对等端分块传输 + MD4 校验）
-	protocolMgr.RegisterProtocol("ed2k", func() core.Protocol { return ed2k.NewED2KProtocol() })
 
 	// 初始化QuadEngine
 	quadEngine := core.NewQuadEngine(protocolMgr)

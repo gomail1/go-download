@@ -6,10 +6,11 @@
 *.so
 *.dylib
 go-download-test.exe
+*.verify_build_temp
 
-# 构建脚本和Dockerfile（不需要包含在镜像中）
-build-docker.bat
-build-docker.sh
+# 发布脚本和Dockerfile（不需要包含在镜像中）
+release-tool.py
+update-deps.py
 Dockerfile
 Dockerfile.light
 
@@ -26,11 +27,18 @@ tests/
 
 # 配置文件（运行时通过volume挂载）
 config/config.json
+config/config.json.bak
 config/daily_upload.json
 config/sort.json
 config/stats.json
 config/shorturls.json
+config/categories.json
+config/file_category_mappings.json
+config/ip_stats.json
 config/icons/
+
+# 任务目录（运行时生成）
+tasks/
 
 # 日志文件
 logs/
@@ -44,6 +52,12 @@ pending/
 
 # SSL证书目录
 ssl/
+
+# 依赖备份目录
+.dependency_backup/
+
+# 用户日志目录
+服务器日志信息/
 
 # 编辑器文件
 .vscode/

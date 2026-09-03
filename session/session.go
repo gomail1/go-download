@@ -3,9 +3,13 @@ package session
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"fmt"
 	"net/http"
+	"strings"
 	"sync"
 	"time"
+
+	"golang.org/x/crypto/bcrypt"
 
 	"go-download-server/config"
 	"go-download-server/constants"
@@ -160,10 +164,92 @@ func generateSessionID() string {
 	return hex.EncodeToString(bytes)
 }
 
-// 辅助函数：计算密码哈希
+// 辅助函数：获取密码哈希（用于会话比较，直接返回存储的密码字符串）
+// 注意：这里不重新哈希，因为bcrypt每次哈希结果不同（随机salt）
+// 会话比较直接比较配置文件中存储的原始密码字符串
 func getPasswordHash(password string) string {
-	// 简单的哈希实现，实际生产环境建议使用更安全的哈希算法
 	return password
+}
+
+// HashPassword 使用bcrypt哈希密码
+// 新用户添加和密码修改时调用
+func HashPassword(password string) (string, error) {
+	bytes, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	if err != nil {
+		return "", err
+	}
+	return string(bytes), nil
+}
+
+// IsBcryptHash 判断密码是否是bcrypt哈希
+// bcrypt哈希格式：$2a$10$... 或 $2b$10$...
+func IsBcryptHash(password string) bool {
+	return strings.HasPrefix(password, "$2a$") || strings.HasPrefix(password, "$2b$") || strings.HasPrefix(password, "$2y$")
+}
+
+// VerifyPassword 验证密码，兼容明文和bcrypt哈希
+// storedPassword 是配置文件中存储的密码（可能是明文或bcrypt哈希）
+// inputPassword 是用户输入的明文密码
+func VerifyPassword(inputPassword, storedPassword string) bool {
+	// 如果是bcrypt哈希，使用bcrypt验证
+	if IsBcryptHash(storedPassword) {
+		err := bcrypt.CompareHashAndPassword([]byte(storedPassword), []byte(inputPassword))
+		return err == nil
+	}
+	// 否则是明文密码，直接比较
+	return inputPassword == storedPassword
+}
+
+// UpgradePasswordToBcrypt 将用户的明文密码升级为bcrypt哈希
+// 登录时如果检测到明文密码，验证成功后自动调用此函数升级
+func UpgradePasswordToBcrypt(username string) error {
+	// 第一步：在持有锁的情况下完成数据修改
+	config.UsersMu.Lock()
+
+	// 查找用户在 AppConfig.Users 切片中的索引
+	userIndex := -1
+	for i, u := range config.AppConfig.Users {
+		if u.Username == username {
+			userIndex = i
+			break
+		}
+	}
+
+	if userIndex == -1 {
+		config.UsersMu.Unlock()
+		return fmt.Errorf("用户不存在: %s", username)
+	}
+
+	userConfig := config.AppConfig.Users[userIndex]
+
+	// 如果已经是bcrypt哈希，不需要升级
+	if IsBcryptHash(userConfig.Password) {
+		config.UsersMu.Unlock()
+		return nil
+	}
+
+	// 使用bcrypt哈希密码
+	hashedPassword, err := HashPassword(userConfig.Password)
+	if err != nil {
+		config.UsersMu.Unlock()
+		return fmt.Errorf("密码哈希失败: %w", err)
+	}
+
+	// 更新 AppConfig.Users 切片中的密码
+	config.AppConfig.Users[userIndex].Password = hashedPassword
+
+	// 重新同步 UserConfigMap
+	config.SyncUserConfigMapLocked()
+
+	// 释放锁（SaveConfig内部会获取读锁，不能在持有写锁时调用）
+	config.UsersMu.Unlock()
+
+	// 第二步：释放锁后保存配置文件
+	if err := config.SaveConfig(); err != nil {
+		return fmt.Errorf("保存配置失败: %w", err)
+	}
+
+	return nil
 }
 
 // 辅助函数：设置会话

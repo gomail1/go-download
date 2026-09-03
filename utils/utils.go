@@ -694,6 +694,10 @@ func GetDirectoryList(baseDir string) []string {
 
 // 辅助函数：生成路径导航
 func GeneratePathNavigation(path string) string {
+	return GeneratePathNavigationWithBase(path, "/files")
+}
+
+func GeneratePathNavigationWithBase(path string, basePath string) string {
 	if path == "." {
 		return ""
 	}
@@ -702,16 +706,33 @@ func GeneratePathNavigation(path string) string {
 	var currentPath string
 
 	parts := strings.Split(path, string(os.PathSeparator))
-	for _, part := range parts {
+	for i, part := range parts {
 		if part == "." {
 			continue
 		}
 
 		currentPath = filepath.Join(currentPath, part)
-		navigation += fmt.Sprintf(`<span class="path-separator">/</span>
-								<div class="path-item">
-									<a href="/files?path=%s" class="path-link">%s</a>
-								</div>`, url.QueryEscape(currentPath), part)
+		isLast := i == len(parts)-1
+
+		if isLast {
+			// 当前目录（不可点击，高亮显示）
+			navigation += fmt.Sprintf(`<span class="breadcrumb-separator">
+				<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+			</span>
+			<span class="breadcrumb-current" title="%s">
+				<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+				%s
+			</span>`, EscapeHTML(part), part)
+		} else {
+			// 上级目录（可点击）
+			navigation += fmt.Sprintf(`<span class="breadcrumb-separator">
+				<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"></polyline></svg>
+			</span>
+			<a href="%s?path=%s" class="breadcrumb-link" title="%s">
+				<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"></path></svg>
+				%s
+			</a>`, basePath, url.QueryEscape(currentPath), EscapeHTML(part), part)
+		}
 	}
 
 	return navigation
@@ -1182,14 +1203,18 @@ func CheckAPIAuthentication(r *http.Request) bool {
 		return false
 	}
 
-	// 兼容旧行为：检查是否有管理员用户使用该密钥（常数时间比较）
+	// 兼容旧行为：检查是否有管理员用户使用该密钥
+	// 支持明文密码和bcrypt哈希密码
 	config.UsersMu.RLock()
 	defer config.UsersMu.RUnlock()
 	for _, user := range config.AppConfig.Users {
-		if (user.Role == "admin" || user.Role == "subadmin") && secureCompare(user.Password, apiKey) {
-			// 认证成功，清除失败记录
-			ClearFailedLogin(clientIP)
-			return true
+		if user.Role == "admin" || user.Role == "subadmin" {
+			// 使用兼容明文和bcrypt的密码验证
+			if session.VerifyPassword(apiKey, user.Password) {
+				// 认证成功，清除失败记录
+				ClearFailedLogin(clientIP)
+				return true
+			}
 		}
 	}
 

@@ -289,11 +289,18 @@ func ChangePasswordHandler(w http.ResponseWriter, r *http.Request) {
 		config.UsersMu.RUnlock()
 	}
 
+	// 使用bcrypt哈希新密码
+	hashedNewPwd, err := session.HashPassword(newPwd)
+	if err != nil {
+		http.Redirect(w, r, "/user-management?msg=密码加密失败", http.StatusFound)
+		return
+	}
+
 	// 修改密码并同步 UserConfigMap（登录鉴权与 session 校验使用该映射）
 	config.UsersMu.Lock()
 	for i := range config.AppConfig.Users {
 		if config.AppConfig.Users[i].Username == username {
-			config.AppConfig.Users[i].Password = newPwd
+			config.AppConfig.Users[i].Password = hashedNewPwd
 			break
 		}
 	}
@@ -361,9 +368,16 @@ func AddUserHandler(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	// 使用bcrypt哈希密码
+	hashedPassword, err := session.HashPassword(password)
+	if err != nil {
+		http.Redirect(w, r, "/user-management?msg=密码加密失败", http.StatusFound)
+		return
+	}
+
 	newUser := config.UserConfig{
 		Username:    username,
-		Password:    password,
+		Password:    hashedPassword,
 		Role:        role,
 		MaxFileSize: maxSize,
 	}

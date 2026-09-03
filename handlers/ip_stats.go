@@ -292,10 +292,10 @@ func GetAllIPStats() []IPDownloadStats {
 		statsList = append(statsList, *stats)
 	}
 
-	// 按下载次数排序
+	// 按最后下载时间排序（最近的IP排在前面）
 	for i := 0; i < len(statsList); i++ {
 		for j := i + 1; j < len(statsList); j++ {
-			if statsList[j].DownloadCount > statsList[i].DownloadCount {
+			if statsList[j].LastDownloadTime.After(statsList[i].LastDownloadTime) {
 				statsList[i], statsList[j] = statsList[j], statsList[i]
 			}
 		}

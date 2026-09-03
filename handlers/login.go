@@ -20,7 +20,8 @@ func authenticateUser(username, password string) (constants.UserRole, bool) {
 	userConfig, exists := config.UserConfigMap[username]
 	config.UsersMu.RUnlock()
 	if exists {
-		if userConfig.Password == password {
+		// 使用兼容明文和bcrypt的密码验证
+		if session.VerifyPassword(password, userConfig.Password) {
 			// 根据角色返回对应的UserRole
 			switch userConfig.Role {
 			case "admin":
@@ -44,6 +45,11 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	// GET请求：显示登录表单
 	if r.Method == "GET" {
+		// 使用客户端IP作为临时sessionID生成CSRF令牌（登录前无正式session）
+		clientIP := utils.GetClientIP(r)
+		tempSessionID := "login_" + clientIP
+		csrfTokenField := utils.GenerateCSRFTokenField(tempSessionID)
+
 		html := `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -68,6 +74,7 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
             <!-- 登录表单 -->
             <form method="POST" class="login-form-v2">
+                ` + csrfTokenField + `
                 <div class="form-group-v2">
                     <label for="username">用户名</label>
                     <input type="text" id="username" name="username" placeholder="请输入用户名" required>
@@ -95,11 +102,20 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 	// POST请求：处理登录逻辑
 	if r.Method == "POST" {
+		// 验证CSRF令牌（使用客户端IP作为临时sessionID）
+		clientIP := utils.GetClientIP(r)
+		tempSessionID := "login_" + clientIP
+		csrfToken := r.FormValue("csrf_token")
+		if !utils.ValidateCSRFToken(tempSessionID, csrfToken) {
+			utils.Log(utils.LogLevelSecurity, "anonymous", "guest", "login_attempt", fmt.Sprintf("IP: %s CSRF令牌验证失败", clientIP))
+			http.Redirect(w, r, fmt.Sprintf("/login?msg=%s&type=error", url.QueryEscape("请求已过期，请刷新页面后重新登录")), http.StatusFound)
+			return
+		}
+
 		// 解析表单
 		r.ParseForm()
 		username := r.FormValue("username")
 		password := r.FormValue("password")
-		clientIP := utils.GetClientIP(r)
 
 		// 严格验证用户名和密码
 		// 1. 长度限制
@@ -142,6 +158,14 @@ func LoginHandler(w http.ResponseWriter, r *http.Request) {
 
 		// 登录成功，清除失败记录
 		utils.ClearFailedLogin(clientIP)
+
+		// 自动升级明文密码为bcrypt哈希（平滑迁移）
+		// 如果用户密码还是明文存储，登录成功后自动升级为bcrypt
+		go func(username string) {
+			if err := session.UpgradePasswordToBcrypt(username); err != nil {
+				log.Printf("密码自动升级失败（用户: %s）: %v", username, err)
+			}
+		}(username)
 
 		// 设置会话
 		sessionID := session.SetSession(w, username, role)

@@ -42,18 +42,53 @@ var (
 // GetCategoryManager 获取分类管理器单例
 func GetCategoryManager() *CategoryManager {
 	categoryManagerOnce.Do(func() {
-		dataDir := filepath.Join(".", "data")
-		os.MkdirAll(dataDir, 0755)
+		// 统一使用config目录存储分类数据
+		configDir := filepath.Join(".", "config")
+		os.MkdirAll(configDir, 0755)
 
 		categoryManager = &CategoryManager{
 			categories:     make([]Category, 0),
 			fileMappings:   make(map[string]string),
-			categoriesFile: filepath.Join(dataDir, "categories.json"),
-			mappingsFile:   filepath.Join(dataDir, "file_category_mappings.json"),
+			categoriesFile: filepath.Join(configDir, "categories.json"),
+			mappingsFile:   filepath.Join(configDir, "file_category_mappings.json"),
 		}
+		categoryManager.migrateFromDataDir()
 		categoryManager.load()
 	})
 	return categoryManager
+}
+
+// migrateFromDataDir 从旧版data目录迁移分类数据到config目录
+func (cm *CategoryManager) migrateFromDataDir() {
+	oldDataDir := filepath.Join(".", "data")
+	oldCategoriesFile := filepath.Join(oldDataDir, "categories.json")
+	oldMappingsFile := filepath.Join(oldDataDir, "file_category_mappings.json")
+
+	// 如果新位置没有文件，但旧位置有，则迁移
+	_, newCategoriesErr := os.Stat(cm.categoriesFile)
+	_, oldCategoriesErr := os.Stat(oldCategoriesFile)
+
+	if os.IsNotExist(newCategoriesErr) && oldCategoriesErr == nil {
+		// 迁移分类数据
+		if data, err := os.ReadFile(oldCategoriesFile); err == nil {
+			if err := os.WriteFile(cm.categoriesFile, data, 0644); err == nil {
+				fmt.Printf("[分类管理] 已从 data/ 迁移 categories.json 到 config/\n")
+			}
+		}
+
+		// 迁移文件分类映射
+		if data, err := os.ReadFile(oldMappingsFile); err == nil {
+			if err := os.WriteFile(cm.mappingsFile, data, 0644); err == nil {
+				fmt.Printf("[分类管理] 已从 data/ 迁移 file_category_mappings.json 到 config/\n")
+			}
+		}
+
+		// 迁移完成后删除旧data目录（如果为空）
+		os.Remove(oldCategoriesFile)
+		os.Remove(oldMappingsFile)
+		os.Remove(oldDataDir)
+		fmt.Printf("[分类管理] 旧 data/ 目录已清理\n")
+	}
 }
 
 // load 从文件加载分类数据

@@ -71,13 +71,13 @@ func getSharedClient() (*torrent.Client, error) {
 		// 不需要额外设置IPv4相关选项，因为默认会同时支持
 		cfg.NoDefaultPortForwarding = false // 启用端口转发
 
-		// 优化连接配置 - 关键内存优化
-		cfg.EstablishedConnsPerTorrent = 30      // 增加每个种子的最大连接数
-		cfg.HalfOpenConnsPerTorrent = 15         // 增加每个种子的半开放连接数
-		cfg.TotalHalfOpenConns = 100             // 增加总半开放连接数
-		cfg.HandshakesTimeout = 60 * time.Second // 增加握手超时时间
-		cfg.TorrentPeersHighWater = 50           // 增加每个种子的最大peer数
-		cfg.TorrentPeersLowWater = 20            // 增加peer低水位线
+		// 优化连接配置 - 增加连接数提高下载速度
+		cfg.EstablishedConnsPerTorrent = 60      // 每个种子的最大已建立连接数
+		cfg.HalfOpenConnsPerTorrent = 25         // 每个种子的半开放连接数
+		cfg.TotalHalfOpenConns = 200             // 总半开放连接数
+		cfg.HandshakesTimeout = 60 * time.Second // 握手超时时间
+		cfg.TorrentPeersHighWater = 100          // 每个种子的最大peer数
+		cfg.TorrentPeersLowWater = 40            // peer低水位线
 
 		// 优化下载配置
 		cfg.DisableAggressiveUpload = false // 启用激进上传，提高下载优先级

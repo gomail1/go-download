@@ -1,20 +1,26 @@
 # 忽略Go编译生成的文件
 go-download-server
+go-download-server-*
 *.exe
 *.exe~
 *.dll
 *.so
 *.dylib
+*.verify_build_temp
 
 # 忽略依赖目录
 vendor/
 
 # 忽略配置文件
 config/config.json
+config/config.json.bak
 config/daily_upload.json
 config/sort.json
 config/stats.json
 config/shorturls.json
+config/categories.json
+config/file_category_mappings.json
+config/ip_stats.json
 
 # 忽略图标缓存目录
 config/icons/
@@ -25,6 +31,7 @@ utils/config/
 
 # 忽略日志文件
 logs/
+*.log
 
 # 忽略下载目录
 downloads/
@@ -32,8 +39,20 @@ downloads/
 # 忽略待审核目录
 pending/
 
+# 忽略任务目录
+tasks/
+
 # 忽略SSL证书目录
 ssl/
+
+# 忽略数据目录
+data/
+
+# 忽略依赖备份目录
+.dependency_backup/
+
+# 忽略用户日志目录
+服务器日志信息/
 
 # 忽略编辑器文件
 .vscode/

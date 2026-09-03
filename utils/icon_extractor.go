@@ -1,4 +1,4 @@
-package utils
+﻿package utils
 
 import (
 	"bytes"
@@ -16,7 +16,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/nfnt/resize"
+	"github.com/disintegration/imaging"
 )
 
 // 资源目录结构
@@ -613,7 +613,7 @@ func (ic *IconCache) GetFileIcon(filePath string) (string, error) {
 	}
 
 	// 调整图标大小为64x64
-	img = resize.Resize(64, 64, img, resize.Lanczos3)
+	img = imaging.Resize(img, 64, 64, imaging.Lanczos)
 
 	// 保存为PNG
 	iconPath := filepath.Join(ic.cacheDir, hash+".png")
@@ -674,7 +674,7 @@ func ExtractIconToBuffer(filePath string) ([]byte, error) {
 	}
 
 	// 调整大小
-	img = resize.Resize(64, 64, img, resize.Lanczos3)
+	img = imaging.Resize(img, 64, 64, imaging.Lanczos)
 
 	// 编码为PNG
 	buf := new(bytes.Buffer)

@@ -650,6 +650,11 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 					const formData = new FormData();
 					formData.append('file', file);
 					formData.append('directory', targetDir);
+					// 添加CSRF令牌
+					const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+					if (csrfMeta) {
+						formData.append('csrf_token', csrfMeta.content);
+					}
 					// 传递相对路径，用于保留文件夹结构
 					if (file.webkitRelativePath) {
 						formData.append('relativePath', file.webkitRelativePath);
@@ -675,18 +680,46 @@ func UploadHandler(w http.ResponseWriter, r *http.Request) {
 						let isSuccess = true;
 						let errorMessage = '';
 						
-						try {
-							// 尝试解析JSON响应
-							response = JSON.parse(this.responseText);
-							if (!response.success) {
-								isSuccess = false;
-								errorMessage = response.message || '上传失败';
+						// 首先检查HTTP状态码
+						if (this.status !== 200) {
+							isSuccess = false;
+							errorMessage = '上传失败 (HTTP ' + this.status + ')';
+							// 尝试从响应中提取错误信息
+							try {
+								response = JSON.parse(this.responseText);
+								if (response.message) {
+									errorMessage = response.message;
+								}
+							} catch (e) {
+								// 非JSON响应，使用原始响应文本（截取前100字符）
+								if (this.responseText && this.responseText.trim()) {
+									errorMessage = this.responseText.trim().substring(0, 100);
+								}
 							}
-						} catch (e) {
-							// 如果不是JSON响应，检查是否是HTML响应
-							if (this.responseText.includes('今日上传量已超过限制')) {
-								isSuccess = false;
-								errorMessage = '今日上传量已超过限制';
+						} else {
+							// HTTP状态码200，尝试解析JSON响应
+							try {
+								response = JSON.parse(this.responseText);
+								if (!response.success) {
+									isSuccess = false;
+									errorMessage = response.message || '上传失败';
+								}
+							} catch (e) {
+								// 如果不是JSON响应，检查是否是HTML响应中的错误信息
+								if (this.responseText.includes('今日上传量已超过限制')) {
+									isSuccess = false;
+									errorMessage = '今日上传量已超过限制';
+								} else if (this.responseText.includes('CSRF令牌验证失败')) {
+									isSuccess = false;
+									errorMessage = 'CSRF令牌验证失败，请刷新页面重试';
+								} else if (this.responseText.includes('不允许上传该类型文件')) {
+									isSuccess = false;
+									errorMessage = '不允许上传该类型文件';
+								} else if (this.responseText.includes('文件大小超过限制')) {
+									isSuccess = false;
+									errorMessage = '文件大小超过限制';
+								}
+								// 其他情况认为成功（可能是重定向或其他响应）
 							}
 						}
 						

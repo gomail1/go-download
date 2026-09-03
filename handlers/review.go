@@ -239,10 +239,23 @@ func ReviewHandler(w http.ResponseWriter, r *http.Request) {
 		</div>
 
 		<!-- 路径导航 -->
-		<div class="path-nav-v2" style="margin-bottom: 20px;">
-			<a href="/review?path=./">📁 根目录</a>
-			` + utils.GeneratePathNavigation(path) + `
-		</div>
+		<nav class="breadcrumb-v2" aria-label="面包屑导航">
+			` + func() string {
+				if path == "." || path == "./" {
+					// 当前在根目录，高亮显示
+					return `<span class="breadcrumb-current breadcrumb-home-active">
+						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+						根目录
+					</span>`
+				}
+				// 不在根目录，可点击返回根目录
+				return `<a href="/review?path=./" class="breadcrumb-home" title="根目录">
+					<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+					根目录
+				</a>`
+			}() + `
+			` + utils.GeneratePathNavigationWithBase(path, "/review") + `
+		</nav>
 
 		<!-- 待审核文件列表 -->
 		<div class="pending-files-v2">

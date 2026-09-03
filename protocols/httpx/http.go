@@ -269,15 +269,33 @@ func (h *HTTPProtocol) Download(ctx context.Context, task *core.Task, progress c
 	totalSize := task.Metadata.Size
 	logger.Infof("Task %s, total size: %d", task.ID, totalSize)
 
-	// Create destination file
+	// Create destination file (不使用O_TRUNC，支持断点续传)
 	destPath := task.Config.SavePath + "/" + task.Metadata.Filename
 	logger.Infof("Creating destination file: %s", destPath)
-	file, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+
+	// 确保目录存在
+	if err := ensureDirExists(destPath); err != nil {
+		logger.Errorf("Failed to create directory: %v", err)
+		return err
+	}
+
+	file, err := os.OpenFile(destPath, os.O_WRONLY|os.O_CREATE, 0644)
 	if err != nil {
 		logger.Errorf("Failed to create destination file %s: %v", destPath, err)
 		return err
 	}
 	defer file.Close()
+
+	// 预分配文件大小（防止文件损坏）
+	if totalSize > 0 {
+		fileInfo, err := file.Stat()
+		if err != nil || fileInfo.Size() < totalSize {
+			if err := file.Truncate(totalSize); err != nil {
+				logger.Errorf("Failed to pre-allocate file: %v", err)
+				return err
+			}
+		}
+	}
 
 	// Start time
 	startTime := time.Now()
@@ -290,42 +308,43 @@ func (h *HTTPProtocol) Download(ctx context.Context, task *core.Task, progress c
 		if maxThreads <= 0 {
 			maxThreads = 4 // Default threads
 		}
-		if maxThreads > 32 {
-			maxThreads = 32 // Maximum threads limit
+		if maxThreads > 100 {
+			maxThreads = 100 // Maximum threads limit
 		}
 
-		// Pre-allocate file size if known - this prevents file corruption
-		if task.Config.PreAllocate {
-			err = file.Truncate(totalSize)
-			if err != nil {
-				logger.Errorf("Failed to pre-allocate file: %v", err)
-				return err
+		// 加载或初始化下载状态（支持断点续传）
+		downloadState, err := loadDownloadState(destPath)
+		if err != nil {
+			logger.Warnf("加载下载状态失败，将重新下载: %v", err)
+			downloadState = nil
+		}
+
+		// 如果状态文件不存在或文件大小不匹配，重新初始化
+		if downloadState == nil || downloadState.TotalSize != totalSize || len(downloadState.Chunks) != maxThreads {
+			logger.Infof("初始化新的下载状态: 线程数=%d, 文件大小=%d", maxThreads, totalSize)
+			downloadState = initDownloadState(task, totalSize, maxThreads)
+			// 保存初始状态
+			if err := saveDownloadState(destPath, downloadState); err != nil {
+				logger.Warnf("保存下载状态失败: %v", err)
 			}
+		} else {
+			completed := countCompletedChunks(downloadState.Chunks)
+			logger.Infof("恢复下载: 已完成 %d/%d 个块", completed, len(downloadState.Chunks))
 		}
 
-		// Calculate chunk size
-		chunkSize := totalSize / int64(maxThreads)
-		remaining := totalSize % int64(maxThreads)
-
-		// Create chunks
+		// 将状态中的块转换为core.Chunk
 		var chunks []*core.Chunk
-		var offset int64
-		for i := 0; i < maxThreads; i++ {
+		for i := range downloadState.Chunks {
+			cs := &downloadState.Chunks[i]
 			chunk := &core.Chunk{
-				ID:     fmt.Sprintf("chunk-%d", i),
-				TaskID: task.ID,
-				Offset: offset,
-				Size:   chunkSize,
-				Status: core.ChunkStatusPending,
+				ID:         cs.ID,
+				TaskID:     task.ID,
+				Offset:     cs.Offset,
+				Size:       cs.Size,
+				Downloaded: cs.Downloaded,
+				Status:     core.ChunkStatus(cs.Status),
 			}
-
-			// Add remaining bytes to last chunk
-			if i == maxThreads-1 {
-				chunk.Size += remaining
-			}
-
 			chunks = append(chunks, chunk)
-			offset += chunkSize
 		}
 
 		// Update task statistics
@@ -337,24 +356,44 @@ func (h *HTTPProtocol) Download(ctx context.Context, task *core.Task, progress c
 		progressUpdateTicker := time.NewTicker(100 * time.Millisecond)
 		defer progressUpdateTicker.Stop()
 
+		// 状态保存定时器（每5秒保存一次）
+		stateSaveTicker := time.NewTicker(5 * time.Second)
+		defer stateSaveTicker.Stop()
+
 		// Wait group for chunks
 		var wg sync.WaitGroup
 
+		// 状态保存互斥锁
+		var stateMu sync.Mutex
+
 		logger.Infof("Starting %d chunks for task %s", len(chunks), task.ID)
 
-		// Download each chunk in parallel
+		// Download each chunk in parallel (跳过已完成的块)
 		for _, chunk := range chunks {
+			if chunk.Status == core.ChunkStatusCompleted {
+				logger.Infof("Chunk %s already completed, skipping", chunk.ID)
+				continue
+			}
 			wg.Add(1)
 			logger.Infof("Launching chunk %s in goroutine", chunk.ID)
 			go h.downloadChunk(ctx, chunk, file, task, &wg)
 		}
 
-		// Progress reporting goroutine
+		// Progress reporting and state saving goroutine
 		go func() {
 			for {
 				select {
 				case <-progressUpdateTicker.C:
 					h.reportProgress(startTime, chunks, progress, task)
+				case <-stateSaveTicker.C:
+					// 定期保存下载状态
+					stateMu.Lock()
+					for i := range chunks {
+						downloadState.Chunks[i].Downloaded = chunks[i].Downloaded
+						downloadState.Chunks[i].Status = string(chunks[i].Status)
+					}
+					saveDownloadState(destPath, downloadState)
+					stateMu.Unlock()
 				case <-ctx.Done():
 					return
 				}
@@ -366,6 +405,41 @@ func (h *HTTPProtocol) Download(ctx context.Context, task *core.Task, progress c
 
 		// Final progress report
 		h.reportProgress(startTime, chunks, progress, task)
+
+		// 保存最终状态
+		stateMu.Lock()
+		for i := range chunks {
+			downloadState.Chunks[i].Downloaded = chunks[i].Downloaded
+			downloadState.Chunks[i].Status = string(chunks[i].Status)
+		}
+		saveDownloadState(destPath, downloadState)
+		stateMu.Unlock()
+
+		// 检查是否所有块都已完成
+		allCompleted := true
+		for _, chunk := range chunks {
+			if chunk.Status != core.ChunkStatusCompleted {
+				allCompleted = false
+				logger.Errorf("Chunk %s not completed: status=%s", chunk.ID, chunk.Status)
+				break
+			}
+		}
+
+		if allCompleted {
+			// 校验文件完整性
+			if downloadState.Checksum != "" {
+				if err := verifyFileChecksum(destPath, downloadState.Checksum, downloadState.ChecksumType); err != nil {
+					logger.Errorf("文件完整性校验失败: %v", err)
+					return fmt.Errorf("文件完整性校验失败: %w", err)
+				}
+			}
+
+			// 下载完成，删除状态文件
+			deleteDownloadState(destPath)
+			logger.Infof("下载完成，已删除状态文件")
+		} else {
+			return fmt.Errorf("部分块下载失败")
+		}
 
 		// Update final status
 		h.statistics.EndTime = new(time.Time)
@@ -576,10 +650,16 @@ func (h *HTTPProtocol) downloadChunk(ctx context.Context, chunk *core.Chunk, fil
 		return err
 	}
 
-	// Set Range header
-	rangeHeader := fmt.Sprintf("bytes=%d-%d", chunk.Offset, chunk.Offset+chunk.Size-1)
+	// Set Range header (支持断点续传：从上次下载的位置继续)
+	startOffset := chunk.Offset + chunk.Downloaded
+	endOffset := chunk.Offset + chunk.Size - 1
+	rangeHeader := fmt.Sprintf("bytes=%d-%d", startOffset, endOffset)
 	req.Header.Set("Range", rangeHeader)
-	logger.Infof("Range header set for chunk %s: %s", chunk.ID, rangeHeader)
+	if chunk.Downloaded > 0 {
+		logger.Infof("断点续传: chunk %s, 已下载 %d/%d 字节, 从位置 %d 继续", chunk.ID, chunk.Downloaded, chunk.Size, startOffset)
+	} else {
+		logger.Infof("Range header set for chunk %s: %s", chunk.ID, rangeHeader)
+	}
 
 	// 添加完整的浏览器请求头，模拟真实浏览器
 	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
@@ -618,7 +698,8 @@ func (h *HTTPProtocol) downloadChunk(ctx context.Context, chunk *core.Chunk, fil
 
 	// Create buffer
 	buffer := make([]byte, 8192)
-	var downloaded int64
+	// 支持断点续传：已下载字节数从chunk.Downloaded开始
+	var downloaded int64 = chunk.Downloaded
 
 	// Create rate limiter if speed limit is set
 	var body io.Reader
@@ -661,7 +742,7 @@ func (h *HTTPProtocol) downloadChunk(ctx context.Context, chunk *core.Chunk, fil
 		n, err := body.Read(buffer)
 		if err != nil {
 			if err == io.EOF {
-				logger.Infof("Chunk %s reached EOF: Downloaded=%d bytes, Expected=%d bytes", chunk.ID, downloaded, chunk.Size)
+				logger.Infof("Chunk %s reached EOF: Total Downloaded=%d bytes, Expected=%d bytes", chunk.ID, downloaded, chunk.Size)
 				// Check if we downloaded the entire chunk
 				if downloaded < chunk.Size {
 					logger.Errorf("Chunk %s incomplete: Downloaded=%d bytes, Expected=%d bytes", chunk.ID, downloaded, chunk.Size)

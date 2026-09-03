@@ -3,6 +3,8 @@
 import (
 	"fmt"
 	"net/http"
+	"strconv"
+	"strings"
 
 	"go-download-server/config"
 	"go-download-server/constants"
@@ -164,12 +166,32 @@ func NewDownloadHandler(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		// 检查是否是ED2K链接（已不再支持）
+		if strings.HasPrefix(strings.ToLower(url), "ed2k://") {
+			http.Redirect(w, r, "/new-download?msg=ED2K协议已不再支持，建议使用BT磁力链接替代", http.StatusFound)
+			return
+		}
+
+		// 获取最大线程数，默认10，范围1-100
+		maxThreads := 10
+		if mt := r.Form.Get("max_threads"); mt != "" {
+			if val, err := strconv.Atoi(mt); err == nil {
+				if val < 1 {
+					maxThreads = 1
+				} else if val > 100 {
+					maxThreads = 100
+				} else {
+					maxThreads = val
+				}
+			}
+		}
+
 		// 创建下载任务请求，使用固定的保存路径，不允许客户端修改
 		req := &core.AddTaskRequest{
 			URL:      url,
 			SavePath: constants.PendingDir + "/download-user", // 固定保存路径，不允许修改
 			Config: &core.TaskConfig{
-				MaxThreads: 8,
+				MaxThreads: maxThreads,
 				SpeedLimit: 0,
 			},
 		}
@@ -226,8 +248,7 @@ func NewDownloadHandler(w http.ResponseWriter, r *http.Request) {
 					<li style="font-size: 13px; color: var(--v2-text-muted);">📥 HTTP/HTTPS - 支持多线程加速下载</li>
 					<li style="font-size: 13px; color: var(--v2-text-muted);">📂 FTP - 已启用（PASV 模式，明文传输，请勿用于敏感文件）</li>
 					<li style="font-size: 13px; color: var(--v2-text-muted);">🧲 BitTorrent - 已启用（磁力链接 / .torrent 种子）</li>
-					<li style="font-size: 13px; color: var(--v2-text-muted);">🅴 ED2K - 已启用（ed2k:// 链接，真实 eDonkey2000 客户端）</li>
-					<li style="font-size: 13px; color: var(--v2-text-muted);">🔧 SFTP / 流媒体协议 - 暂未实现</li>
+					<li style="font-size: 13px; color: var(--v2-text-muted);">🔧 SFTP / 流媒体协议 / ED2K - 暂未实现</li>
 					</ul>
 				</div>
 
@@ -235,7 +256,7 @@ func NewDownloadHandler(w http.ResponseWriter, r *http.Request) {
 					` + utils.GenerateCSRFTokenField(sessionID) + `
 					<div style="margin-bottom: 16px;">
 						<label for="url" style="display: block; font-size: 13px; font-weight: 500; color: var(--v2-text); margin-bottom: 8px;">下载链接</label>
-						<input type="text" id="url" name="url" style="width: 100%; padding: 12px 16px; border: 1px solid var(--v2-border); border-radius: 10px; font-size: 14px; color: var(--v2-text); background: var(--v2-bg); box-sizing: border-box;" placeholder="支持 http(s)://、ftp://、magnet: 磁力链接、ed2k:// 链接">
+						<input type="text" id="url" name="url" style="width: 100%; padding: 12px 16px; border: 1px solid var(--v2-border); border-radius: 10px; font-size: 14px; color: var(--v2-text); background: var(--v2-bg); box-sizing: border-box;" placeholder="支持 http(s)://、ftp://、magnet: 磁力链接">
 					</div>
 
 					<div style="margin-bottom: 16px;">
@@ -258,7 +279,7 @@ func NewDownloadHandler(w http.ResponseWriter, r *http.Request) {
 						
 						<div class="form-group">
 							<label for="max_threads" style="display: block; font-size: 13px; font-weight: 500; color: var(--v2-text); margin-bottom: 8px;">最大线程数</label>
-							<input type="number" id="max_threads" name="max_threads" style="width: 100%; padding: 12px 16px; border: 1px solid var(--v2-border); border-radius: 10px; font-size: 14px; color: var(--v2-text); background: var(--v2-bg); box-sizing: border-box;" value="8" min="1" max="32">
+							<input type="number" id="max_threads" name="max_threads" style="width: 100%; padding: 12px 16px; border: 1px solid var(--v2-border); border-radius: 10px; font-size: 14px; color: var(--v2-text); background: var(--v2-bg); box-sizing: border-box;" value="10" min="1" max="100">
 						</div>
 					</div>
 
@@ -378,22 +399,57 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 			<p>点击"新建下载"按钮创建您的第一个下载任务</p>
 		</div>`
 	} else {
-		tasksHTML = `<table class="table">
+		tasksHTML = `<div class="table-container" style="overflow-x: auto;">
+		<table class="data-table-v2" style="width: 100%; table-layout: fixed; border-collapse: collapse;">
 		<thead>
 			<tr>
-				<th>任务ID</th>
-				<th>URL</th>
-				<th>协议</th>
-				<th>状态</th>
-				<th>进度</th>
-				<th>速度</th>
-				<th>创建时间</th>
-				<th>操作</th>
+				<th style="width: 20%; padding: 12px 10px; text-align: left; white-space: nowrap;">文件名</th>
+				<th style="width: 24%; padding: 12px 10px; text-align: left; white-space: nowrap;">下载链接</th>
+				<th style="width: 6%; padding: 12px 10px; text-align: center; white-space: nowrap;">协议</th>
+				<th style="width: 9%; padding: 12px 10px; text-align: center; white-space: nowrap;">状态</th>
+				<th style="width: 6%; padding: 12px 10px; text-align: center; white-space: nowrap;">进度</th>
+				<th style="width: 7%; padding: 12px 10px; text-align: center; white-space: nowrap;">速度</th>
+				<th style="width: 6%; padding: 12px 10px; text-align: center; white-space: nowrap;">节点</th>
+				<th style="width: 10%; padding: 12px 10px; text-align: center; white-space: nowrap;">创建时间</th>
+				<th style="width: 12%; padding: 12px 10px; text-align: center; white-space: nowrap;">操作</th>
 			</tr>
 		</thead>
 		<tbody>`
 
+		// 状态中文映射
+		statusMap := map[core.TaskStatus]string{
+			core.TaskStatusCompleted:  "已完成",
+			core.TaskStatusDownloading: "下载中",
+			core.TaskStatusFailed:     "失败",
+			core.TaskStatusPaused:     "已暂停",
+			core.TaskStatusWaiting:    "等待中",
+			core.TaskStatusPreparing:  "准备中",
+			core.TaskStatusCancelled:  "已取消",
+		}
+
+		// 协议中文映射
+		protocolMap := map[string]string{
+			"http":        "HTTP",
+			"https":       "HTTPS",
+			"ftp":         "FTP",
+			"bittorrent":  "BT",
+			"bt":          "BT",
+			"ed2k":        "ED2K",
+			"magnet":      "磁力",
+		}
+
 		for _, task := range filteredTasks {
+			// 获取文件名
+			filename := task.ID
+			if task.Metadata != nil && task.Metadata.Filename != "" {
+				filename = task.Metadata.Filename
+			}
+			// 文件名过长截断
+			displayName := filename
+			if len(displayName) > 40 {
+				displayName = displayName[:40] + "..."
+			}
+
 			// 格式化URL，只显示前50个字符
 			displayURL := task.URL
 			if len(displayURL) > 50 {
@@ -407,6 +463,16 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 			speed := utils.FormatFileSize(task.Progress.Speed) + "/s"
 			if task.Progress.Speed == 0 {
 				speed = "0 B/s"
+			}
+
+			// 格式化节点数（BT任务显示）
+			peersDisplay := "-"
+			if task.Protocol == "bt" || task.Protocol == "magnet" || task.Protocol == "bittorrent" {
+				if task.Progress.TotalPeers > 0 {
+					peersDisplay = fmt.Sprintf("%d/%d", task.Progress.ActivePeers, task.Progress.TotalPeers)
+				} else if task.Progress.ActivePeers > 0 {
+					peersDisplay = fmt.Sprintf("%d", task.Progress.ActivePeers)
+				}
 			}
 
 			// 格式化创建时间
@@ -425,6 +491,20 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 				statusClass = "status-paused"
 			case core.TaskStatusWaiting:
 				statusClass = "status-waiting"
+			case core.TaskStatusPreparing:
+				statusClass = "status-waiting"
+			}
+
+			// 中文状态
+			displayStatus := statusMap[task.Status]
+			if displayStatus == "" {
+				displayStatus = string(task.Status)
+			}
+
+			// 中文协议
+			displayProtocol := protocolMap[task.Protocol]
+			if displayProtocol == "" {
+				displayProtocol = task.Protocol
 			}
 
 			// 根据任务状态决定显示的按钮
@@ -440,29 +520,34 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 				resumeBtn = ""
 			}
 
-			tasksHTML += fmt.Sprintf(`<tr>
-						<td>%s</td>
-						<td title="%s">%s</td>
-						<td>%s</td>
-						<td><span class="status %s">%s</span></td>
-						<td>%s</td>
-						<td>%s</td>
-						<td>%s</td>
-						<td>
-							<a href="/download-task?id=%s" class="btn btn-sm btn-primary">查看</a>
-							%s
-							%s
-							<a href="#" class="btn btn-sm btn-danger" onclick="deleteTask('%s')">删除</a>
+			tasksHTML += fmt.Sprintf(`<tr style="vertical-align: middle;">
+						<td style="padding: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.4;" title="%s">%s</td>
+						<td style="padding: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.4; font-size: 12px; color: var(--v2-text-muted);" title="%s">%s</td>
+						<td style="padding: 10px; text-align: center; white-space: nowrap;">%s</td>
+						<td style="padding: 10px; text-align: center; white-space: nowrap;"><span class="status %s">%s</span></td>
+						<td style="padding: 10px; text-align: center; white-space: nowrap; font-family: monospace;">%s</td>
+						<td style="padding: 10px; text-align: center; white-space: nowrap; font-family: monospace;">%s</td>
+						<td style="padding: 10px; text-align: center; white-space: nowrap; font-size: 12px; color: var(--v2-text-muted);">%s</td>
+						<td style="padding: 10px; text-align: center; white-space: nowrap; font-size: 12px;">%s</td>
+						<td style="padding: 10px; text-align: center;">
+							<div style="display: inline-flex; gap: 4px; align-items: center;">
+								<a href="/download-task?id=%s" class="btn btn-sm btn-primary" style="padding: 4px 8px; font-size: 12px; white-space: nowrap; display: inline-block;">查看</a>
+								%s
+								%s
+								<a href="#" class="btn btn-sm btn-danger" style="padding: 4px 8px; font-size: 12px; white-space: nowrap; display: inline-block;" onclick="deleteTask('%s')">删除</a>
+							</div>
 						</td>
 					</tr>`,
-				utils.EscapeHTML(task.ID),
+				utils.EscapeHTML(filename),
+				utils.EscapeHTML(displayName),
 				utils.EscapeHTML(task.URL),
 				utils.EscapeHTML(displayURL),
-				task.Protocol,
+				displayProtocol,
 				statusClass,
-				task.Status,
+				displayStatus,
 				progress,
 				speed,
+				peersDisplay,
 				createdAt,
 				task.ID,
 				pauseBtn,
@@ -472,7 +557,8 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		tasksHTML += `</tbody>
-	</table>`
+	</table>
+	</div>`
 	}
 
 	html := `<!DOCTYPE html>
@@ -515,7 +601,6 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 							<a href="/download-tasks?status=paused" ` + activePaused + ` style="padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; text-decoration: none; background: var(--v2-bg-elev); color: var(--v2-text); border: 1px solid var(--v2-border);">已暂停</a>
 							<a href="/download-tasks?status=failed" ` + activeFailed + ` style="padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; text-decoration: none; background: var(--v2-bg-elev); color: var(--v2-text); border: 1px solid var(--v2-border);">失败</a>
 							<a href="/download-tasks?status=waiting" ` + activeWaiting + ` style="padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; text-decoration: none; background: var(--v2-bg-elev); color: var(--v2-text); border: 1px solid var(--v2-border);">等待中</a>
-							<button id="auto-refresh-btn" style="padding: 8px 16px; border-radius: 8px; font-size: 13px; font-weight: 500; cursor: pointer; background: #ef4444; color: white; border: none;">关闭自动刷新</button>
 						</div>
 			</div>
 
@@ -526,12 +611,9 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 	</div>
 
 	<script>
-		// 自动刷新相关变量
-		let autoRefreshInterval = null;
-		let isAutoRefreshEnabled = true; // 默认开启自动刷新
-		const SHORT_REFRESH_INTERVAL = 5000; // 创建任务后的短刷新间隔（5秒）
-		const LONG_REFRESH_INTERVAL = 60000; // 正常刷新间隔（60秒）
-		let lastCreatedTime = Date.now(); // 最后一次创建任务的时间
+		// 实时刷新间隔（2秒）
+		const REFRESH_INTERVAL = 2000;
+		let refreshTimer = null;
 
 		// 暂停任务
 		function pauseTask(taskId) {
@@ -638,7 +720,7 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 				});
 				
 				// 获取表格元素
-				const table = document.querySelector('.table');
+				const table = document.querySelector('.data-table-v2');
 				if (!table) {
 					console.error('未找到表格元素');
 					return;
@@ -658,7 +740,7 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 				// 如果没有任务，显示空消息
 				if (filteredTasks.length === 0) {
 					tbody.innerHTML = '<tr>' +
-						'<td colspan="8" style="text-align: center; padding: 20px;">' +
+						'<td colspan="9" style="text-align: center; padding: 20px;">' +
 							'<div class="empty-message">' +
 								'<div class="empty-icon">📭</div>' +
 								'<h3>暂无下载任务</h3>' +
@@ -707,6 +789,30 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 						'preparing': '准备中'
 					};
 
+					// 协议映射：英文 → 中文
+					const protocolMap = {
+						'http': 'HTTP',
+						'https': 'HTTPS',
+						'ftp': 'FTP',
+						'bt': 'BT',
+						'bittorrent': 'BT',
+						'magnet': '磁力',
+						'ed2k': 'ED2K'
+					};
+
+					// 显示中文协议
+					const displayProtocol = protocolMap[task.protocol] || task.protocol;
+
+					// 格式化节点数（BT任务显示）
+					let peersDisplay = '-';
+					if (task.protocol === 'bt' || task.protocol === 'magnet' || task.protocol === 'bittorrent') {
+						if (task.progress && task.progress.total_peers > 0) {
+							peersDisplay = task.progress.active_peers + '/' + task.progress.total_peers;
+						} else if (task.progress && task.progress.active_peers > 0) {
+							peersDisplay = task.progress.active_peers.toString();
+						}
+					}
+
 					// 生成状态样式
 					let statusClass = '';
 					switch (task.status) {
@@ -753,12 +859,13 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 					const row = document.createElement('tr');
 					row.innerHTML = '<td title="' + (task.id || '') + '">' + filename + '</td>' +
 							'<td title="' + (task.url || '') + '">' + (displayURL || '') + '</td>' +
-							'<td>' + (task.protocol || '') + '</td>' +
-							'<td><span class="status ' + statusClass + '">' + displayStatus + '</span></td>' +
-							'<td>' + progress + '</td>' +
-							'<td>' + speed + '</td>' +
-							'<td>' + createdAt + '</td>' +
-							'<td>' +
+							'<td style="text-align: center;">' + displayProtocol + '</td>' +
+							'<td style="text-align: center;"><span class="status ' + statusClass + '">' + displayStatus + '</span></td>' +
+							'<td style="text-align: center;">' + progress + '</td>' +
+							'<td style="text-align: center;">' + speed + '</td>' +
+							'<td style="text-align: center; font-size: 12px; color: #6b7280;">' + peersDisplay + '</td>' +
+							'<td style="text-align: center; font-size: 12px;">' + createdAt + '</td>' +
+							'<td style="text-align: center;">' +
 								'<a href="/download-task?id=' + (task.id || '') + '" class="btn btn-sm btn-primary">查看</a>' +
 								pauseBtn +
 								resumeBtn +
@@ -770,78 +877,34 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 			} catch (error) {
 				console.error('刷新任务列表出错:', error);
 				// 显示错误提示，帮助调试
-				const table = document.querySelector('.table');
+				const table = document.querySelector('.data-table-v2');
 				if (table) {
 					let tbody = table.querySelector('tbody');
 					if (!tbody) {
 						tbody = document.createElement('tbody');
 						table.appendChild(tbody);
 					}
-					tbody.innerHTML = '<tr><td colspan="8" style="text-align: center; padding: 20px; color: red;">刷新任务列表时出错: ' + error.message + '</td></tr>';
+					tbody.innerHTML = '<tr><td colspan="9" style="text-align: center; padding: 20px; color: red;">刷新任务列表时出错: ' + error.message + '</td></tr>';
 				}
 			}
 		}
 
-		// 切换自动刷新状态
-		function toggleAutoRefresh() {
-			isAutoRefreshEnabled = !isAutoRefreshEnabled;
-			const btn = document.getElementById('auto-refresh-btn');
-			if (isAutoRefreshEnabled) {
-				startAutoRefresh();
-				btn.textContent = '关闭自动刷新';
-				btn.className = 'btn btn-danger';
-			} else {
-				stopAutoRefresh();
-				btn.textContent = '开启自动刷新';
-				btn.className = 'btn btn-primary';
+		// 启动实时刷新
+		function startRealTimeRefresh() {
+			if (refreshTimer) {
+				clearInterval(refreshTimer);
 			}
-		}
-
-		// 获取当前应该使用的刷新间隔
-		function getCurrentRefreshInterval() {
-			// 计算距离最后一次创建任务的时间（毫秒）
-			const timeSinceLastCreated = Date.now() - lastCreatedTime;
-			// 任务创建后的5分钟内使用短间隔，之后使用长间隔
-			// 5分钟 = 5 * 60 * 1000 = 300000毫秒
-			return timeSinceLastCreated < 300000 ? SHORT_REFRESH_INTERVAL : LONG_REFRESH_INTERVAL;
-		}
-
-		// 动态调整刷新间隔
-		function adjustRefreshInterval() {
-			if (!isAutoRefreshEnabled) return;
-			
-			// 停止当前的刷新
-			if (autoRefreshInterval) {
-				clearInterval(autoRefreshInterval);
-				autoRefreshInterval = null;
-			}
-			
-			// 获取当前应该使用的刷新间隔
-			const currentInterval = getCurrentRefreshInterval();
-			// 启动新的刷新，只刷新任务列表，不再递归调用adjustRefreshInterval
-			autoRefreshInterval = setInterval(() => {
+			refreshTimer = setInterval(() => {
 				refreshTaskList();
-			}, currentInterval);
+			}, REFRESH_INTERVAL);
 		}
 
-		// 启动自动刷新
-		function startAutoRefresh() {
-			adjustRefreshInterval();
-		}
-
-		// 停止自动刷新
-		function stopAutoRefresh() {
-			if (autoRefreshInterval) {
-				clearInterval(autoRefreshInterval);
-				autoRefreshInterval = null;
+		// 停止实时刷新
+		function stopRealTimeRefresh() {
+			if (refreshTimer) {
+				clearInterval(refreshTimer);
+				refreshTimer = null;
 			}
-		}
-
-		// 更新最后创建任务时间
-		function updateLastCreatedTime() {
-			lastCreatedTime = Date.now();
-			// 调整刷新间隔
-			adjustRefreshInterval();
 		}
 
 		// 添加日期格式化方法
@@ -868,17 +931,11 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 
 		// 页面加载完成后初始化
 		document.addEventListener('DOMContentLoaded', function() {
-			// 添加自动刷新按钮事件监听
-			const refreshBtn = document.getElementById('auto-refresh-btn');
-			if (refreshBtn) {
-				refreshBtn.onclick = toggleAutoRefresh;
-			}
-			
 			// 初始加载任务列表
 			refreshTaskList();
 			
-			// 启动自动刷新
-			startAutoRefresh();
+			// 启动实时刷新（每2秒更新一次下载速度和进度）
+			startRealTimeRefresh();
 		});
 	</script>
 
@@ -933,7 +990,83 @@ func DownloadTaskHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 生成任务详情HTML
+	// 状态中文映射
+	statusMap := map[core.TaskStatus]string{
+		core.TaskStatusCompleted:  "已完成",
+		core.TaskStatusDownloading: "下载中",
+		core.TaskStatusFailed:     "失败",
+		core.TaskStatusPaused:     "已暂停",
+		core.TaskStatusWaiting:    "等待中",
+		core.TaskStatusPreparing:  "准备中",
+		core.TaskStatusCancelled:  "已取消",
+	}
+	displayStatus := statusMap[task.Status]
+	if displayStatus == "" {
+		displayStatus = string(task.Status)
+	}
+
+	// 协议中文映射
+	protocolMap := map[string]string{
+		"http":       "HTTP",
+		"https":      "HTTPS",
+		"ftp":        "FTP",
+		"bittorrent": "BT",
+		"bt":         "BT",
+		"ed2k":       "ED2K",
+		"magnet":     "磁力",
+	}
+	displayProtocol := protocolMap[task.Protocol]
+	if displayProtocol == "" {
+		displayProtocol = task.Protocol
+	}
+
+	// 状态样式
+	statusClass := ""
+	switch task.Status {
+	case core.TaskStatusCompleted:
+		statusClass = "status-completed"
+	case core.TaskStatusDownloading:
+		statusClass = "status-downloading"
+	case core.TaskStatusFailed:
+		statusClass = "status-failed"
+	case core.TaskStatusPaused:
+		statusClass = "status-paused"
+	case core.TaskStatusWaiting:
+		statusClass = "status-waiting"
+	case core.TaskStatusPreparing:
+		statusClass = "status-waiting"
+	}
+
+	// 获取文件名
+	filename := task.ID
+	if task.Metadata != nil && task.Metadata.Filename != "" {
+		filename = task.Metadata.Filename
+	}
+
+	// 操作按钮
+	var pauseBtn, resumeBtn string
+	if task.Status == core.TaskStatusDownloading {
+		pauseBtn = fmt.Sprintf(`<button class="btn btn-secondary" onclick="pauseTask('%s')">暂停任务</button>`, task.ID)
+	} else if task.Status == core.TaskStatusPaused {
+		resumeBtn = fmt.Sprintf(`<button class="btn btn-secondary" onclick="resumeTask('%s')">恢复任务</button>`, task.ID)
+	}
+
+	// 完成时间
+	completedAtStr := ""
+	if task.CompletedAt != nil {
+		completedAtStr = task.CompletedAt.Format("2006-01-02 15:04:05")
+	}
+
+	// 错误信息
+	errorInfo := ""
+	if task.Error != "" {
+		errorInfo = fmt.Sprintf(`
+				<div class="detail-card" style="border-left: 4px solid #ef4444;">
+					<div class="detail-card-title">错误信息</div>
+					<div class="detail-card-content" style="color: #ef4444; word-break: break-all;">%s</div>
+				</div>`, utils.EscapeHTML(task.Error))
+	}
+
 	html := `<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
@@ -943,116 +1076,267 @@ func DownloadTaskHandler(w http.ResponseWriter, r *http.Request) {
 	` + utils.GenerateCSRFTokenMeta(utils.GetSessionIDFromRequest(r)) + `
 	<script src="/static/js/csrf.js"></script>
 	<link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>📦</text></svg>">
-	<link rel="stylesheet" href="/static/styles.css">
-
+	<link rel="stylesheet" href="/static/styles.css?v=2">
+	<style>
+		.detail-card {
+			background: var(--v2-bg-elev);
+			border: 1px solid var(--v2-border);
+			border-radius: 12px;
+			padding: 20px 24px;
+			margin-bottom: 16px;
+		}
+		.detail-card-title {
+			font-size: 14px;
+			font-weight: 600;
+			color: var(--v2-text-muted);
+			margin-bottom: 12px;
+			text-transform: uppercase;
+			letter-spacing: 0.5px;
+		}
+		.detail-card-content {
+			font-size: 15px;
+			color: var(--v2-text);
+			word-break: break-all;
+		}
+		.detail-grid {
+			display: grid;
+			grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+			gap: 16px;
+		}
+		.detail-item {
+			display: flex;
+			flex-direction: column;
+			gap: 4px;
+		}
+		.detail-label {
+			font-size: 12px;
+			color: var(--v2-text-muted);
+			font-weight: 500;
+		}
+		.detail-value {
+			font-size: 15px;
+			color: var(--v2-text);
+			font-weight: 500;
+			word-break: break-all;
+		}
+		.progress-bar-container {
+			width: 100%;
+			height: 12px;
+			background: var(--v2-bg);
+			border-radius: 6px;
+			overflow: hidden;
+			margin-top: 8px;
+		}
+		.progress-bar-fill {
+			height: 100%;
+			background: linear-gradient(90deg, #3b82f6, #6366f1);
+			border-radius: 6px;
+			transition: width 0.3s ease;
+		}
+		.action-buttons {
+			display: flex;
+			gap: 12px;
+			flex-wrap: wrap;
+		}
+	</style>
 </head>
 <body class="v2 admin-layout">
 	<div class="admin-layout-wrapper">
 		` + utils.GetAdminSidebar(r, config.AppConfig.Server.ServerName) + `
 		<main class="admin-main">
 			<div class="admin-page-header">
-				<h1 class="admin-page-title">下载管理</h1>
-				<p class="admin-page-desc">管理BT、磁力链接等下载任务</p>
+				<h1 class="admin-page-title">下载任务详情</h1>
+				<p class="admin-page-desc">查看和管理下载任务的详细信息</p>
 			</div>
-	<div class="header">
-		<div class="logo">📦 ` + constants.ServerName + `</div>
-		<div class="user-info">
-			` + utils.GetCurrentUserInfo(r) + `
-		</div>
-	</div>
 
-	<!-- 导航菜单 -->
-	<div class="nav-menu">
-		<ul>
-			<li><a href="/files">文件列表</a></li>
-			<li><a href="/upload">上传文件</a></li>
-			` + utils.GetAdminLinks(r) + `
-		</ul>
-	</div>
-
-	<div class="container">
-		<div class="content">
 			<!-- 显示消息 -->
-			` + utils.GetMessage(r) + `
-
-			<div class="back-link">
-				<a href="/download-tasks" class="btn btn-secondary">返回下载任务列表</a>
+			<div class="upload-message-v2">
+				` + utils.GetMessage(r) + `
 			</div>
 
-			<div class="task-detail">
-				<h2>下载任务详情</h2>
-				
-				<div class="detail-item">
-					<span class="detail-label">任务ID:</span>
-					<span class="detail-value">` + utils.EscapeHTML(task.ID) + `</span>
-				</div>
+			<!-- 下载管理标签页 -->
+			<div style="display: flex; gap: 8px; margin-bottom: 24px; flex-wrap: wrap;">
+				<a href="/downloads" style="padding: 10px 20px; border-radius: 10px; font-size: 14px; font-weight: 500; text-decoration: none; background: var(--v2-bg-elev); color: var(--v2-text); border: 1px solid var(--v2-border);">概览</a>
+				<a href="/new-download" style="padding: 10px 20px; border-radius: 10px; font-size: 14px; font-weight: 500; text-decoration: none; background: var(--v2-bg-elev); color: var(--v2-text); border: 1px solid var(--v2-border);">新建下载</a>
+				<a href="/download-tasks" style="padding: 10px 20px; border-radius: 10px; font-size: 14px; font-weight: 500; text-decoration: none; background: var(--v2-primary); color: white;">下载任务</a>
+			</div>
 
-				<div class="detail-item">
-					<span class="detail-label">下载URL:</span>
-					<span class="detail-value">` + utils.EscapeHTML(task.URL) + `</span>
+			<!-- 返回按钮 -->
+			<div style="margin-bottom: 20px;">
+				<a href="/download-tasks" class="btn btn-secondary" style="display: inline-flex; align-items: center; gap: 6px;">
+					← 返回任务列表
+				</a>
+			</div>
+
+			<!-- 任务基本信息 -->
+			<div class="detail-card" style="border-left: 4px solid var(--v2-primary);">
+				<div class="detail-card-title">任务信息</div>
+				<div class="detail-card-content">
+					<div style="font-size: 18px; font-weight: 600; margin-bottom: 8px;">` + utils.EscapeHTML(filename) + `</div>
+					<div style="display: flex; gap: 12px; align-items: center; flex-wrap: wrap;">
+						<span class="status ` + statusClass + `" style="font-size: 13px; padding: 4px 12px;">` + displayStatus + `</span>
+						<span style="font-size: 13px; color: var(--v2-text-muted); padding: 4px 12px; background: var(--v2-bg); border-radius: 6px;">` + displayProtocol + `</span>
+						<span style="font-size: 12px; color: var(--v2-text-muted);">任务ID: ` + utils.EscapeHTML(task.ID) + `</span>
+					</div>
 				</div>
-				
-				<div class="detail-item">
-					<span class="detail-label">协议:</span>
-					<span class="detail-value">` + task.Protocol + `</span>
-				</div>
-				
-				<div class="detail-item">
-					<span class="detail-label">状态:</span>
-					<span class="detail-value">
-						<span class="status status-` + string(task.Status) + `">` + string(task.Status) + `</span>
-					</span>
-				</div>
-				
-				<div class="detail-item">
-					<span class="detail-label">保存路径:</span>
-					<span class="detail-value">` + task.Config.SavePath + `</span>
-				</div>
-				
-				<div class="detail-item">
-					<span class="detail-label">进度:</span>
-					<div class="detail-value">
-						<span>` + fmt.Sprintf("%.1f%%", task.Progress.Percentage) + `</span>
-						<div class="progress-bar">
-							<div class="progress-fill" style="width: ` + fmt.Sprintf("%.1f%%", task.Progress.Percentage) + `;"></div>
+			</div>
+
+			` + errorInfo + `
+
+			<!-- 下载进度 -->
+			<div class="detail-card">
+				<div class="detail-card-title">下载进度</div>
+				<div class="detail-card-content">
+					<div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
+						<span style="font-size: 24px; font-weight: 700; color: var(--v2-primary);">` + fmt.Sprintf("%.1f", task.Progress.Percentage) + `%</span>
+						<span style="font-size: 14px; color: var(--v2-text-muted);">` + utils.FormatFileSize(task.Progress.Downloaded) + ` / ` + utils.FormatFileSize(task.Progress.TotalSize) + `</span>
+					</div>
+					<div class="progress-bar-container">
+						<div class="progress-bar-fill" style="width: ` + fmt.Sprintf("%.1f%%", task.Progress.Percentage) + `;"></div>
+					</div>
+					<div style="display: flex; gap: 24px; margin-top: 16px; flex-wrap: wrap;">
+						<div>
+							<div style="font-size: 12px; color: var(--v2-text-muted);">下载速度</div>
+							<div style="font-size: 18px; font-weight: 600;">` + utils.FormatFileSize(task.Progress.Speed) + `/s</div>
+						</div>
+						<div>
+							<div style="font-size: 12px; color: var(--v2-text-muted);">已下载</div>
+							<div style="font-size: 18px; font-weight: 600;">` + utils.FormatFileSize(task.Progress.Downloaded) + `</div>
+						</div>
+						<div>
+							<div style="font-size: 12px; color: var(--v2-text-muted);">总大小</div>
+							<div style="font-size: 18px; font-weight: 600;">` + utils.FormatFileSize(task.Progress.TotalSize) + `</div>
 						</div>
 					</div>
 				</div>
-				
-				<div class="detail-item">
-					<span class="detail-label">已下载:</span>
-					<span class="detail-value">` + utils.FormatFileSize(task.Progress.Downloaded) + `</span>
-				</div>
-				
-				<div class="detail-item">
-					<span class="detail-label">总大小:</span>
-					<span class="detail-value">` + utils.FormatFileSize(task.Progress.TotalSize) + `</span>
-				</div>
-				
-				<div class="detail-item">
-					<span class="detail-label">速度:</span>
-					<span class="detail-value">` + utils.FormatFileSize(task.Progress.Speed) + `/s</span>
-				</div>
-				
-				<div class="detail-item">
-					<span class="detail-label">创建时间:</span>
-					<span class="detail-value">` + task.CreatedAt.Format("2006-01-02 15:04:05") + `</span>
-				</div>
-				
-				` + func() string {
-		if task.CompletedAt != nil {
-			return `<div class="detail-item"><span class="detail-label">完成时间:</span><span class="detail-value">` + task.CompletedAt.Format("2006-01-02 15:04:05") + `</span></div>`
-		} else {
-			return ""
-		}
-	}() + `
 			</div>
-		</div>
 
-		<footer>
-			<p>版本: ` + constants.Version + ` | 开发者: ` + constants.Developer + ` | <a href="` + constants.RepoURL + `" target="_blank" title="GitHub仓库"><svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="vertical-align: middle;"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.435.372.825 1.102.825 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"></path></svg></a></p>
-		</footer>
+			<!-- 详细信息网格 -->
+			<div class="detail-grid">
+				<div class="detail-card">
+					<div class="detail-card-title">基本信息</div>
+					<div class="detail-item" style="margin-bottom: 12px;">
+						<span class="detail-label">协议类型</span>
+						<span class="detail-value">` + displayProtocol + `</span>
+					</div>
+					<div class="detail-item" style="margin-bottom: 12px;">
+						<span class="detail-label">任务状态</span>
+						<span class="detail-value"><span class="status ` + statusClass + `">` + displayStatus + `</span></span>
+					</div>
+					<div class="detail-item">
+						<span class="detail-label">保存路径</span>
+						<span class="detail-value" style="font-size: 13px;">` + utils.EscapeHTML(task.Config.SavePath) + `</span>
+					</div>
+				</div>
+
+				<div class="detail-card">
+					<div class="detail-card-title">时间信息</div>
+					<div class="detail-item" style="margin-bottom: 12px;">
+						<span class="detail-label">创建时间</span>
+						<span class="detail-value">` + task.CreatedAt.Format("2006-01-02 15:04:05") + `</span>
+					</div>
+					` + func() string {
+		if completedAtStr != "" {
+			return `<div class="detail-item">
+						<span class="detail-label">完成时间</span>
+						<span class="detail-value">` + completedAtStr + `</span>
+					</div>`
+		}
+		return `<div class="detail-item">
+						<span class="detail-label">完成时间</span>
+						<span class="detail-value" style="color: var(--v2-text-muted);">未完成</span>
+					</div>`
+	}() + `
+				</div>
+			</div>
+
+			<!-- 下载链接 -->
+			<div class="detail-card">
+				<div class="detail-card-title">下载链接</div>
+				<div class="detail-card-content" style="font-size: 13px; font-family: monospace; background: var(--v2-bg); padding: 12px 16px; border-radius: 8px; word-break: break-all;">
+					` + utils.EscapeHTML(task.URL) + `
+				</div>
+			</div>
+
+			<!-- 操作按钮 -->
+			<div class="detail-card">
+				<div class="detail-card-title">任务操作</div>
+				<div class="action-buttons">
+					` + pauseBtn + `
+					` + resumeBtn + `
+					<button class="btn btn-danger" onclick="deleteTask('` + task.ID + `')">删除任务</button>
+					<a href="/download-tasks" class="btn btn-secondary">返回列表</a>
+				</div>
+			</div>
+
+		</main>
 	</div>
+
+	<script>
+		// 暂停任务
+		function pauseTask(taskId) {
+			if (confirm('确定要暂停该任务吗？')) {
+				fetch('/api/tasks/' + taskId + '/pause', {
+					method: 'PUT'
+				})
+				.then(response => {
+					if (response.ok) {
+						location.reload();
+					} else {
+						alert('暂停任务失败');
+					}
+				})
+				.catch(error => {
+					alert('暂停任务出错: ' + error.message);
+				});
+			}
+		}
+
+		// 恢复任务
+		function resumeTask(taskId) {
+			if (confirm('确定要恢复该任务吗？')) {
+				fetch('/api/tasks/' + taskId + '/resume', {
+					method: 'PUT'
+				})
+				.then(response => {
+					if (response.ok) {
+						location.reload();
+					} else {
+						alert('恢复任务失败');
+					}
+				})
+				.catch(error => {
+					alert('恢复任务出错: ' + error.message);
+				});
+			}
+		}
+
+		// 删除任务
+		function deleteTask(taskId) {
+			if (confirm('确定要删除该任务吗？此操作不可恢复。')) {
+				fetch('/api/tasks/' + taskId, {
+					method: 'DELETE'
+				})
+				.then(response => {
+					if (response.ok) {
+						window.location.href = '/download-tasks?msg=任务已删除';
+					} else {
+						alert('删除任务失败');
+					}
+				})
+				.catch(error => {
+					alert('删除任务出错: ' + error.message);
+				});
+			}
+		}
+
+		// 自动刷新页面（下载中任务每5秒刷新一次）
+		setTimeout(function() {
+			if ('` + displayStatus + `' === '下载中' || '` + displayStatus + `' === '准备中' || '` + displayStatus + `' === '等待中') {
+				location.reload();
+			}
+		}, 5000);
+	</script>
 </body>
 </html>`
 

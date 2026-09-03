@@ -1628,10 +1628,23 @@ func FilesHandler(w http.ResponseWriter, r *http.Request) {
 			</div>
 
 			<!-- 路径导航 -->
-			<div class="path-nav-v2">
-				<a href="/files?path=./">📁 根目录</a>
+			<nav class="breadcrumb-v2" aria-label="面包屑导航">
+				` + func() string {
+					if path == "." || path == "./" {
+						// 当前在根目录，高亮显示
+						return `<span class="breadcrumb-current breadcrumb-home-active">
+							<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+							根目录
+						</span>`
+					}
+					// 不在根目录，可点击返回根目录
+					return `<a href="/files?path=./" class="breadcrumb-home" title="根目录">
+						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
+						根目录
+					</a>`
+				}() + `
 				` + utils.GeneratePathNavigation(path) + `
-			</div>
+			</nav>
 
 				<!-- 文件列表 -->
 			` + func() string {
@@ -2307,6 +2320,15 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 					const form = document.createElement('form');
 					form.method = 'POST';
 					form.action = '/batch-delete';
+					// 添加CSRF令牌
+					const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+					if (csrfMeta) {
+						const csrfInput = document.createElement('input');
+						csrfInput.type = 'hidden';
+						csrfInput.name = 'csrf_token';
+						csrfInput.value = csrfMeta.content;
+						form.appendChild(csrfInput);
+					}
 					files.forEach(file => {
 						const input = document.createElement('input');
 						input.type = 'hidden';
@@ -2355,10 +2377,18 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 				// 获取当前路径
 				const currentPath = new URL(window.location.href).searchParams.get('path') || '.';
 
+				// 获取CSRF令牌
+				const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+				const csrfToken = csrfMeta ? csrfMeta.content : '';
+
 				// 创建AJAX请求
 				const xhr = new XMLHttpRequest();
 				xhr.open('POST', '/mkdir', true);
 				xhr.setRequestHeader('Content-Type', 'application/x-www-form-urlencoded');
+				// 添加CSRF令牌请求头
+				if (csrfToken) {
+					xhr.setRequestHeader('X-CSRF-Token', csrfToken);
+				}
 
 				xhr.onload = function() {
 					if (xhr.status === 200) {
@@ -2524,6 +2554,16 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 					form.action = '/batch-move';
 				} else {
 					form.action = '/batch-copy';
+				}
+
+				// 添加CSRF令牌
+				const csrfMeta = document.querySelector('meta[name="csrf-token"]');
+				if (csrfMeta) {
+					const csrfInput = document.createElement('input');
+					csrfInput.type = 'hidden';
+					csrfInput.name = 'csrf_token';
+					csrfInput.value = csrfMeta.content;
+					form.appendChild(csrfInput);
 				}
 
 				// 添加选中的文件
