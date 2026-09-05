@@ -23,6 +23,26 @@ func (s *Server) sessionAuthMiddleware() gin.HandlerFunc {
 	}
 }
 
+// adminAuthMiddleware 要求已登录且具备管理员权限（远程下载管理等后台功能）
+func (s *Server) adminAuthMiddleware() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		sess := session.GetCurrentUser(c.Request)
+		if sess == nil {
+			c.AbortWithStatusJSON(http.StatusUnauthorized, gin.H{
+				"error": "未登录或会话已过期，请重新登录",
+			})
+			return
+		}
+		if !sess.IsAdmin {
+			c.AbortWithStatusJSON(http.StatusForbidden, gin.H{
+				"error": "需要管理员权限",
+			})
+			return
+		}
+		c.Next()
+	}
+}
+
 // csrfWriteMiddleware 对写请求（POST/PUT/DELETE/PATCH）校验CSRF令牌
 // 前端页面已注入 meta + csrf.js，fetch/XHR 会自动携带 X-CSRF-Token 头
 func (s *Server) csrfWriteMiddleware() gin.HandlerFunc {

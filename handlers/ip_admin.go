@@ -273,6 +273,7 @@ func IPAdminHandler(w http.ResponseWriter, r *http.Request) {
 					<div style="display: flex; gap: 10px;">
 						<button class="btn btn-danger" onclick="openAddBlockModal()">🚫 添加封禁IP</button>
 						<button class="btn btn-primary" onclick="openLimitConfig()">⚙️ 限额配置</button>
+						<button class="btn btn-primary" onclick="openAuditModal()">🧰 自检修复</button>
 						<button class="btn btn-primary" onclick="refreshIPList()">🔄 刷新</button>
 					</div>
 				</div>
@@ -391,6 +392,62 @@ func IPAdminHandler(w http.ResponseWriter, r *http.Request) {
 		</div>
 	</div>
 
+	<!-- 下载统计自检修复弹窗(IP统计 + 文件统计 双卡) -->
+	<div class="modal-overlay" id="auditModal">
+		<div class="modal" style="max-width: 900px;">
+			<div class="modal-header">
+				<h3 class="modal-title">🧰 下载统计自检修复</h3>
+				<button class="modal-close" onclick="closeModal('auditModal')">&times;</button>
+			</div>
+			<div style="line-height: 1.8;">
+				<div style="padding: 10px 12px; background: var(--v2-bg); border: 1px solid var(--v2-border); border-radius: 8px; margin-bottom: 12px; font-size: 13px; color: var(--v2-text-secondary);">
+					旧版本存在「下载分片(Range)重复计数 / 启动时日志回填叠加」问题:不仅 IP 管理页次数虚高,首页「累计下载」、
+					文件列表每文件次数、热力图同样被污染(旧版每个分片传输都 +1 次数/热力点,并按整文件大小累加流量)。
+					下方分别对账 IP 统计与文件统计(stats.json),可按需各自一键从日志重建(自动备份原数据、保留分享/封禁)。
+				</div>
+
+				<div id="auditGrid" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+					<!-- 左卡: IP统计 -->
+					<div style="border:1px solid var(--v2-border);border-radius:10px;padding:12px;">
+						<div style="font-weight:700;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+							<span>IP 下载统计</span>
+							<span id="ipAuditBadge"></span>
+						</div>
+						<div id="ipAuditLoading" style="padding:14px 0;text-align:center;color:var(--v2-text-secondary);font-size:13px;">正在对账…</div>
+						<div id="ipAuditResult" style="display:none;"></div>
+						<div id="ipAuditAction" style="display:none;margin-top:10px;">
+							<div id="ipArmTip" style="display:none;margin-bottom:8px;padding:8px 10px;background:#fff7e6;border:1px solid #ffe1a8;border-radius:8px;font-size:12px;color:#ad6800;line-height:1.7;">
+								将备份 ip_stats.json.bak.&lt;时间戳&gt;,封禁列表保留。再次点击即执行,5 秒内未点击自动取消。
+							</div>
+							<div style="display:flex;gap:8px;justify-content:flex-end;">
+								<button class="btn" style="font-size:12px;padding:4px 10px;" onclick="runIPAudit()">重新检测</button>
+								<button class="btn btn-danger" style="font-size:12px;padding:4px 10px;" id="btnIPRebuild" onclick="armRebuild('ip')">执行修复(从日志重建)</button>
+							</div>
+						</div>
+					</div>
+					<!-- 右卡: 文件统计 -->
+					<div style="border:1px solid var(--v2-border);border-radius:10px;padding:12px;">
+						<div style="font-weight:700;margin-bottom:8px;display:flex;justify-content:space-between;align-items:center;">
+							<span>文件统计 / 热力图</span>
+							<span id="statsAuditBadge"></span>
+						</div>
+						<div id="statsAuditLoading" style="padding:14px 0;text-align:center;color:var(--v2-text-secondary);font-size:13px;">正在对账…</div>
+						<div id="statsAuditResult" style="display:none;"></div>
+						<div id="statsAuditAction" style="display:none;margin-top:10px;">
+							<div id="statsArmTip" style="display:none;margin-bottom:8px;padding:8px 10px;background:#fff7e6;border:1px solid #ffe1a8;border-radius:8px;font-size:12px;color:#ad6800;line-height:1.7;">
+								将备份 stats.json.bak.&lt;时间戳&gt;,分享计数保留;次数回落、流量按实际传输修正属口径修正而非丢失。再次点击即执行,5 秒内未点击自动取消。
+							</div>
+							<div style="display:flex;gap:8px;justify-content:flex-end;">
+								<button class="btn" style="font-size:12px;padding:4px 10px;" onclick="runStatsAudit()">重新检测</button>
+								<button class="btn btn-danger" style="font-size:12px;padding:4px 10px;" id="btnStatsRebuild" onclick="armRebuild('stats')">执行修复(从日志重建)</button>
+							</div>
+						</div>
+					</div>
+				</div>
+			</div>
+		</div>
+	</div>
+
 	<div class="toast" id="toast"></div>
 
 	<script src="/static/js/csrf.js"></script>
@@ -406,6 +463,7 @@ func IPAdminHandler(w http.ResponseWriter, r *http.Request) {
 
 		function closeModal(modalId) {
 			document.getElementById(modalId).classList.remove('active');
+			if (modalId === 'auditModal') { resetRebuildArm('ip'); resetRebuildArm('stats'); }
 		}
 
 		function openAddBlockModal() {
@@ -538,6 +596,224 @@ func IPAdminHandler(w http.ResponseWriter, r *http.Request) {
 				}
 			})
 			.catch(function() { showToast('网络错误', 'error'); });
+		}
+
+		// ---------- 自检修复(双卡: IP统计 + 文件统计) ----------
+
+		// 打开弹窗并同时触发两块对账
+		function openAuditModal() {
+			document.getElementById('auditModal').classList.add('active');
+			runIPAudit();
+			runStatsAudit();
+		}
+
+		function auditBadgeHTML(needFix) {
+			return needFix
+				? '<span style="background:#fee4e2;color:#b42318;padding:2px 10px;border-radius:10px;font-size:12px;">建议修复</span>'
+				: '<span style="background:#d1fadf;color:#027a48;padding:2px 10px;border-radius:10px;font-size:12px;">未发现明显异常</span>';
+		}
+
+		// 对账数字卡
+		function auditStatCard(title, body) {
+			return '<div style="padding: 12px; background: var(--v2-bg-elev); border: 1px solid var(--v2-border); border-radius: 8px; text-align: center;">'
+				+ body
+				+ '<div style="margin-top: 6px; font-size: 12px; color: var(--v2-text-secondary);">' + escapeHTML(title) + '</div></div>';
+		}
+
+		// 渲染「当前 vs 真值」对账内容(共用)
+		function renderCompareHTML(a, curText, logText, metaText, historyWarn) {
+			return '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">'
+				+ auditStatCard('当前统计数据', curText)
+				+ auditStatCard('日志口径(真值)', logText)
+				+ '</div>'
+				+ '<div style="margin-top:12px;display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:6px;">'
+				+ '<div style="font-size:12px;color:var(--v2-text-secondary);">' + metaText + '</div>'
+				+ auditBadgeHTML(a.need_fix)
+				+ '</div>'
+				+ '<div style="margin-top:10px;padding:8px 10px;background:var(--v2-bg);border-radius:8px;font-size:12px;color:var(--v2-text-secondary);">' + escapeHTML(a.verdict) + '</div>'
+				+ (historyWarn || '');
+		}
+
+		// ---------- 左卡: IP 统计 ----------
+		function runIPAudit() {
+			var loading = document.getElementById('ipAuditLoading');
+			var res = document.getElementById('ipAuditResult');
+			var act = document.getElementById('ipAuditAction');
+			resetRebuildArm('ip');
+			loading.style.display = 'block';
+			res.style.display = 'none';
+			act.style.display = 'none';
+			document.getElementById('ipAuditBadge').innerHTML = '';
+			fetch('/api/ip/audit')
+			.then(function(r) { return r.json(); })
+			.then(function(d) {
+				loading.style.display = 'none';
+				if (!d.success || !d.audit) {
+					res.style.display = 'block';
+					res.innerHTML = '<div style="color:#f04438;">' + escapeHTML(d.message || '获取失败') + '</div>';
+					return;
+				}
+				var a = d.audit;
+				var historyWarn = '';
+				if (a.older_history_ips > 0) {
+					historyWarn = '<div style="margin-top:10px;padding:8px 10px;background:var(--v2-bg);border:1px solid var(--v2-border);border-radius:8px;font-size:12px;color:var(--v2-text-secondary);">⚠ 提示:' + a.older_history_ips + ' 个 IP 的活动早于现存日志(最早 ' + escapeHTML(a.earliest_log_date || '') + '),重建会清除这部分超期计数,请确认接受。</div>';
+				}
+				var curText = '<div style="font-size:20px;font-weight:700;color:var(--v2-primary);">' + auditNum(a.current_downloads) + '</div>'
+					+ '<div style="font-size:12px;color:var(--v2-text-secondary);">次下载 / ' + formatBytes(a.current_bandwidth || 0) + ' / ' + auditNum(a.current_ips) + ' 个IP</div>';
+				var logText = '<div style="font-size:20px;font-weight:700;color:var(--v2-primary);">' + auditNum(a.log_downloads) + '</div>'
+					+ '<div style="font-size:12px;color:var(--v2-text-secondary);">次逻辑下载 / ' + formatBytes(a.log_bandwidth || 0) + ' / ' + auditNum(a.log_ips) + ' 个IP</div>';
+				var meta = '虚高倍数:' + (a.ratio > 0 ? a.ratio.toFixed(1) + ' 倍' : '—')
+					+ ' · 日志:' + auditNum(a.log_files) + ' 个文件'
+					+ (a.earliest_log_date ? ' · 最早 ' + escapeHTML(a.earliest_log_date) : '');
+				res.innerHTML = renderCompareHTML(a, curText, logText, meta, historyWarn);
+				res.style.display = 'block';
+				act.style.display = 'flex';
+				document.getElementById('ipAuditBadge').innerHTML = auditBadgeHTML(a.need_fix);
+			})
+			.catch(function() {
+				loading.style.display = 'none';
+				res.style.display = 'block';
+				res.innerHTML = '<div style="color:#f04438;">网络错误,请重试</div>';
+			});
+		}
+
+		// ---------- 右卡: 文件统计(stats.json) ----------
+		function runStatsAudit() {
+			var loading = document.getElementById('statsAuditLoading');
+			var res = document.getElementById('statsAuditResult');
+			var act = document.getElementById('statsAuditAction');
+			resetRebuildArm('stats');
+			loading.style.display = 'block';
+			res.style.display = 'none';
+			act.style.display = 'none';
+			document.getElementById('statsAuditBadge').innerHTML = '';
+			fetch('/api/stats/audit')
+			.then(function(r) { return r.json(); })
+			.then(function(d) {
+				loading.style.display = 'none';
+				if (!d.success || !d.audit) {
+					res.style.display = 'block';
+					res.innerHTML = '<div style="color:#f04438;">' + escapeHTML(d.message || '获取失败') + '</div>';
+					return;
+				}
+				var a = d.audit;
+				var historyWarn = '';
+				if (a.older_history_files > 0) {
+					historyWarn = '<div style="margin-top:10px;padding:8px 10px;background:var(--v2-bg);border:1px solid var(--v2-border);border-radius:8px;font-size:12px;color:var(--v2-text-secondary);">⚠ 提示:' + a.older_history_files + ' 个文件的下载早于现存日志(最早 ' + escapeHTML(a.earliest_log_date || '') + '),重建会清除这部分超期计数,请确认接受。</div>';
+				}
+				var curText = '<div style="font-size:20px;font-weight:700;color:var(--v2-primary);">' + auditNum(a.current_downloads) + '</div>'
+					+ '<div style="font-size:12px;color:var(--v2-text-secondary);">次下载 / ' + formatBytes(a.current_bandwidth || 0) + ' / ' + auditNum(a.current_files) + ' 个文件 / ' + auditNum(a.current_heat_points) + ' 热力点</div>';
+				var logText = '<div style="font-size:20px;font-weight:700;color:var(--v2-primary);">' + auditNum(a.log_downloads) + '</div>'
+					+ '<div style="font-size:12px;color:var(--v2-text-secondary);">次逻辑下载 / ' + formatBytes(a.log_bandwidth || 0) + ' / ' + auditNum(a.log_files) + ' 个文件</div>';
+				var meta = '次数虚高:' + (a.ratio > 0 ? a.ratio.toFixed(1) + ' 倍' : '—')
+					+ ' · 带宽虚高:' + (a.bandwidth_ratio > 0 ? a.bandwidth_ratio.toFixed(1) + ' 倍' : '—')
+					+ (a.earliest_log_date ? ' · 日志最早 ' + escapeHTML(a.earliest_log_date) : '');
+				res.innerHTML = renderCompareHTML(a, curText, logText, meta, historyWarn);
+				res.style.display = 'block';
+				act.style.display = 'flex';
+				document.getElementById('statsAuditBadge').innerHTML = auditBadgeHTML(a.need_fix);
+			})
+			.catch(function() {
+				loading.style.display = 'none';
+				res.style.display = 'block';
+				res.innerHTML = '<div style="color:#f04438;">网络错误,请重试</div>';
+			});
+		}
+
+		function auditNum(n) {
+			if (typeof n !== 'number') n = 0;
+			return n.toLocaleString('zh-CN');
+		}
+
+		// 原地二段确认:第一次点击进入武装态(5s倒计时),再次点击才真正执行;不弹系统对话框
+		var rebuildArmTimers = {};   // kind -> timer id
+		var rebuildArmLeft = {};
+		var rebuildKinds = ['ip', 'stats'];
+
+		function armRebuild(kind) {
+			var btnId = kind === 'ip' ? 'btnIPRebuild' : 'btnStatsRebuild';
+			var tipId = kind === 'ip' ? 'ipArmTip' : 'statsArmTip';
+			var btn = document.getElementById(btnId);
+			if (rebuildArmTimers[kind]) {
+				// 已处于武装态 → 第二次点击 = 确认执行
+				clearInterval(rebuildArmTimers[kind]);
+				rebuildArmTimers[kind] = null;
+				doRebuild(kind);
+				return;
+			}
+			rebuildArmLeft[kind] = 5;
+			document.getElementById(tipId).style.display = 'block';
+			btn.textContent = '⚠ 确认执行(' + rebuildArmLeft[kind] + 's)';
+			btn.style.boxShadow = '0 0 0 2px rgba(217,45,32,0.45)';
+			btn.style.filter = 'brightness(1.08)';
+			var me = kind;
+			rebuildArmTimers[kind] = setInterval(function() {
+				rebuildArmLeft[me]--;
+				if (rebuildArmLeft[me] <= 0) {
+					resetRebuildArm(me);
+					return;
+				}
+				var b2 = document.getElementById(me === 'ip' ? 'btnIPRebuild' : 'btnStatsRebuild');
+				if (b2) b2.textContent = '⚠ 确认执行(' + rebuildArmLeft[me] + 's)';
+			}, 1000);
+		}
+
+		function resetRebuildArm(kind) {
+			if (!kind) { rebuildKinds.forEach(function(k) { resetRebuildArm(k); }); return; }
+			if (rebuildArmTimers[kind]) {
+				clearInterval(rebuildArmTimers[kind]);
+				rebuildArmTimers[kind] = null;
+			}
+			var btn = document.getElementById(kind === 'ip' ? 'btnIPRebuild' : 'btnStatsRebuild');
+			if (!btn) return;
+			btn.disabled = false;
+			btn.textContent = '执行修复(从日志重建)';
+			btn.style.boxShadow = '';
+			btn.style.filter = '';
+			document.getElementById(kind === 'ip' ? 'ipArmTip' : 'statsArmTip').style.display = 'none';
+		}
+
+		// 执行修复:按日志口径重建(IP统计 → /api/ip/rebuild; 文件统计 → /api/stats/rebuild)
+		function doRebuild(kind) {
+			var api = kind === 'ip' ? '/api/ip/rebuild' : '/api/stats/rebuild';
+			var btnId = kind === 'ip' ? 'btnIPRebuild' : 'btnStatsRebuild';
+			var resId = kind === 'ip' ? 'ipAuditResult' : 'statsAuditResult';
+			var btn = document.getElementById(btnId);
+			btn.disabled = true;
+			btn.textContent = '正在重建…';
+			document.getElementById(kind === 'ip' ? 'ipArmTip' : 'statsArmTip').style.display = 'none';
+			fetch(api, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json' },
+				body: '{}'
+			})
+			.then(function(r) { return r.json(); })
+			.then(function(d) {
+				var res = document.getElementById(resId);
+				res.style.display = 'block';
+				if (d.success) {
+					var a = d.audit || {};
+					var extra = '';
+					if (kind === 'ip') {
+						extra = '保留封禁:' + (d.blocked_preserved || 0) + ' 个 · 重建后:下载 ' + auditNum(a.current_downloads)
+							+ ' 次 / 流量 ' + formatBytes(a.current_bandwidth || 0) + ' / ' + auditNum(a.current_ips) + ' 个 IP';
+					} else {
+						extra = '重建后:累计下载 ' + auditNum(a.current_downloads) + ' 次 / 流量 ' + formatBytes(a.current_bandwidth || 0)
+							+ ' · 热力点 ' + auditNum(a.current_heat_points);
+					}
+					res.innerHTML = '<div style="padding:12px;background:#d1fadf;color:#027a48;border-radius:8px;font-size:13px;line-height:1.9;">✔ 修复完成!' + escapeHTML(d.message || '')
+						+ '<br>' + extra + '</div>';
+					resetRebuildArm(kind);
+					setTimeout(function() { location.reload(); }, 2000);
+				} else {
+					resetRebuildArm(kind);
+					res.innerHTML = '<div style="color:#f04438;">' + escapeHTML(d.message || '重建失败') + '</div>';
+				}
+			})
+			.catch(function() {
+				resetRebuildArm(kind);
+				showToast('网络错误', 'error');
+			});
 		}
 
 		// 点击弹窗外部关闭

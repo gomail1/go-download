@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"html"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
@@ -144,7 +145,8 @@ func GetClientIP(r *http.Request) string {
 		parts := strings.Split(xForwardedFor, ",")
 		if len(parts) > 0 {
 			ip := strings.TrimSpace(parts[0])
-			if ip != "" {
+			// 仅信任能通过 IP 格式校验的头值：防止客户端直连时伪造 XFF 注入任意字符串/冒用他人 IP
+			if ip != "" && normalizeIP(ip) != "" {
 				return normalizeIP(ip)
 			}
 		}
@@ -153,7 +155,10 @@ func GetClientIP(r *http.Request) string {
 	// 检查X-Real-IP头
 	xRealIP := r.Header.Get("X-Real-IP")
 	if xRealIP != "" {
-		return normalizeIP(strings.TrimSpace(xRealIP))
+		ip := normalizeIP(strings.TrimSpace(xRealIP))
+		if ip != "" {
+			return ip
+		}
 	}
 
 	// 如果以上都没有，从远程地址解析IP
@@ -176,6 +181,7 @@ func GetClientIP(r *http.Request) string {
 
 // normalizeIP 标准化IP地址，将IPv6回环地址转换为IPv4格式
 func normalizeIP(ip string) string {
+	ip = strings.TrimSpace(ip)
 	// 将IPv6回环地址 ::1 转换为 IPv4 回环地址 127.0.0.1
 	if ip == "::1" || ip == "[::1]" {
 		return "127.0.0.1"
@@ -183,6 +189,10 @@ func normalizeIP(ip string) string {
 	// 去除IPv6地址的方括号
 	ip = strings.TrimPrefix(ip, "[")
 	ip = strings.TrimSuffix(ip, "]")
+	// 格式校验：非法值（攻击者伪造的 XFF/任意字符串）返回空，调用方将回退到可信来源
+	if net.ParseIP(ip) == nil {
+		return ""
+	}
 	return ip
 }
 

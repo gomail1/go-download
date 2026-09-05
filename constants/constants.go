@@ -10,7 +10,7 @@ const (
 	LogFile     = "server.log"
 	// 飞牛系统部署路径配置
 	ServerName = "Go 下载站"
-	Version    = "v1.2.0"
+	Version    = "v1.3.0"
 	Developer  = "gomail1"
 	RepoURL    = "https://github.com/gomail1/go-download"
 	// HTTPS证书默认路径

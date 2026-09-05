@@ -65,8 +65,8 @@ func (s *Server) setupRoutes() {
 	// 添加API日志中间件
 	s.engine.Use(s.apiLogMiddleware())
 
-	// 需要登录 + CSRF防护的路由组（管理页面AJAX调用）
-	authed := s.engine.Group("/", s.sessionAuthMiddleware(), s.csrfWriteMiddleware())
+	// 需要登录 + 管理员角色 + CSRF防护的路由组（远程下载管理为管理员功能）
+	authed := s.engine.Group("/", s.adminAuthMiddleware(), s.csrfWriteMiddleware())
 	{
 		// Tasks endpoints
 		authed.GET("/tasks", s.GetTasks)
@@ -77,8 +77,13 @@ func (s *Server) setupRoutes() {
 		authed.PUT("/tasks/:id/resume", s.ResumeTask)
 		authed.DELETE("/tasks/:id", s.DeleteTask)
 
-		// Statistics endpoint
-		authed.GET("/stats", s.GetStatistics)
+		// Statistics endpoint（已废弃，见下）
+		// authed.GET("/stats", s.GetStatistics)
+		//
+		// 说明：该路由在 gin 前缀（/api）下映射为 /api/stats，但 main.go 用
+		// net/http 精确注册了 /api/stats（handlers.StatsHandler，文件/分享下载统计），
+		// ServeMux 精确匹配优先 → 此路由自引入起从未生效。任务统计无调用方，
+		// 删除以免与真实统计接口混淆（详见代码审查报告 #14）。
 	}
 
 	// WebSocket endpoint（握手为GET，仅要求登录，无法自定义CSRF请求头）

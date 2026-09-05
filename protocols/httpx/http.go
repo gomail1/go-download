@@ -13,6 +13,7 @@ import (
 
 	"go-download-server/internal/core"
 	"go-download-server/internal/logger"
+	"go-download-server/utils"
 )
 
 // rateLimiter implements a simple token bucket rate limiter
@@ -36,32 +37,45 @@ func newRateLimiter(reader io.Reader, limit int64) *rateLimiter {
 	}
 }
 
-// Read implements the io.Reader interface with rate limiting
+// Read implements the io.Reader interface with rate limiting.
+// 令牌桶按时间线性补充；配额不足时按缺口阻塞等待后重试（而非空读自旋），
+// 等待期满一次性读足请求长度。修复：原实现桶耗尽时把缓冲切成 0 长度空读，
+// 且每次调用都把 lastRefill 前移导致微秒级间隔永远凑不足令牌，限速下载实际卡死。
 func (rl *rateLimiter) Read(p []byte) (n int, err error) {
 	// No limit if limit is 0
 	if rl.limit <= 0 {
 		return rl.reader.Read(p)
 	}
 
-	rl.mu.Lock()
-	defer rl.mu.Unlock()
-
-	// Refill the bucket
-	rl.refill()
-
-	// Determine how many bytes to read
-	if int64(len(p)) > rl.bucket {
-		p = p[:rl.bucket]
+	want := int64(len(p))
+	if want <= 0 {
+		return rl.reader.Read(p)
+	}
+	// 单次突发不超过桶容量（limit），保证输出平滑
+	if want > rl.limit {
+		want = rl.limit
 	}
 
-	// Read from the underlying reader
-	n, err = rl.reader.Read(p)
-	if n > 0 {
-		// Consume tokens
-		rl.bucket -= int64(n)
+	for {
+		rl.mu.Lock()
+		rl.refill()
+		if rl.bucket < want {
+			// 配额不足：按缺口折算等待时长，睡醒后重新结算（lastRefill 未前移，
+			// 整段睡眠会被 refill 计入，一次补足所需令牌）
+			need := want - rl.bucket
+			wait := time.Duration(float64(need) / float64(rl.limit) * float64(time.Second))
+			rl.mu.Unlock()
+			time.Sleep(wait)
+			continue
+		}
+		// 配额充足：读请求长度（不超过 want），消耗对应令牌
+		n, err = rl.reader.Read(p[:want])
+		if n > 0 {
+			rl.bucket -= int64(n)
+		}
+		rl.mu.Unlock()
+		return n, err
 	}
-
-	return
 }
 
 // refill adds tokens to the bucket based on elapsed time
@@ -100,13 +114,21 @@ func NewHTTPProtocol() *HTTPProtocol {
 
 	return &HTTPProtocol{
 		client: &http.Client{
-			Timeout: 30 * time.Second,
-			Jar:     jar, // 添加Cookie支持
+			// 注意：不能设置全局 Timeout。http.Client.Timeout 会把「读取响应体」的总时长也计入，
+			// 开启限速（SpeedLimit>0）下载大文件时单 chunk 必然超过 30s，触发
+			// context deadline exceeded 而中断下载。请求生命周期改由任务上下文（ctx，引擎
+			// Pause/Cancel/Close 均会取消）管理；建连超时由 SafeDialContext 内部 30s 兜底，
+			// 响应头等待由 Transport.ResponseHeaderTimeout 兜底。
+			Jar: jar, // 添加Cookie支持
 			Transport: &http.Transport{
-				MaxIdleConns:        100,
-				MaxConnsPerHost:     100,
-				MaxIdleConnsPerHost: 100,
-				IdleConnTimeout:     90 * time.Second,
+				// 防 SSRF：每次拨号前重新解析主机并校验真实 IP，阻断内网/回环/保留地址，
+				// 同时防御重定向绕过与 DNS rebinding。
+				DialContext:           utils.SafeDialContext,
+				ResponseHeaderTimeout: 30 * time.Second,
+				MaxIdleConns:          100,
+				MaxConnsPerHost:       100,
+				MaxIdleConnsPerHost:   100,
+				IdleConnTimeout:       90 * time.Second,
 			},
 		},
 		status: core.Status{
@@ -270,7 +292,11 @@ func (h *HTTPProtocol) Download(ctx context.Context, task *core.Task, progress c
 	logger.Infof("Task %s, total size: %d", task.ID, totalSize)
 
 	// Create destination file (不使用O_TRUNC，支持断点续传)
-	destPath := task.Config.SavePath + "/" + task.Metadata.Filename
+	// 经清洗与目录逃逸校验，确保写入位置始终在 SavePath 内
+	destPath, err := utils.SafeJoinFile(task.Config.SavePath, task.Metadata.Filename)
+	if err != nil {
+		return err
+	}
 	logger.Infof("Creating destination file: %s", destPath)
 
 	// 确保目录存在
@@ -683,6 +709,7 @@ func (h *HTTPProtocol) downloadChunk(ctx context.Context, chunk *core.Chunk, fil
 	}
 	logger.Infof("Received response for chunk %s: StatusCode=%d, ContentLength=%d", chunk.ID, resp.StatusCode, resp.ContentLength)
 	defer resp.Body.Close()
+	defer resp.Body.Close()
 
 	// Check if server supports range requests
 	if resp.StatusCode != http.StatusPartialContent {
@@ -738,8 +765,33 @@ func (h *HTTPProtocol) downloadChunk(ctx context.Context, chunk *core.Chunk, fil
 			return nil
 		}
 
-		// Read data with rate limiting
+		// Read data with rate limiting.
+		// 注意：Go 的 io.Reader 允许一次 Read 同时返回 (n>0, io.EOF)，
+		// 即最后一块数据与流结束一起到达（小文件/小块单次读完时常见）。
+		// 因此必须先处理 n 字节数据，再判断 err，绝不能因 err==EOF 丢弃本轮 n。
 		n, err := body.Read(buffer)
+
+		// 先写入本轮读到的数据（若有）
+		if n > 0 {
+			// Write to file at specific offset - WriteAt is thread-safe for different offsets
+			writeOffset := chunk.Offset + downloaded
+			_, werr := file.WriteAt(buffer[:n], writeOffset)
+			if werr != nil {
+				logger.Errorf("Error writing data for chunk %s at offset %d: %v", chunk.ID, writeOffset, werr)
+				chunk.Status = core.ChunkStatusFailed
+				return werr
+			}
+			// Update downloaded bytes
+			downloaded += int64(n)
+			chunk.Downloaded = downloaded
+
+			// Log progress every 1MB
+			if downloaded%(1024*1024) == 0 {
+				logger.Infof("Chunk %s progress: Downloaded=%d bytes", chunk.ID, downloaded)
+			}
+		}
+
+		// 再处理错误（EOF = 正常读完，其他错误 = 失败）
 		if err != nil {
 			if err == io.EOF {
 				logger.Infof("Chunk %s reached EOF: Total Downloaded=%d bytes, Expected=%d bytes", chunk.ID, downloaded, chunk.Size)
@@ -754,24 +806,6 @@ func (h *HTTPProtocol) downloadChunk(ctx context.Context, chunk *core.Chunk, fil
 			logger.Errorf("Error reading data for chunk %s: %v", chunk.ID, err)
 			chunk.Status = core.ChunkStatusFailed
 			return err
-		}
-
-		// Write to file at specific offset - WriteAt is thread-safe for different offsets
-		writeOffset := chunk.Offset + downloaded
-		_, err = file.WriteAt(buffer[:n], writeOffset)
-		if err != nil {
-			logger.Errorf("Error writing data for chunk %s at offset %d: %v", chunk.ID, writeOffset, err)
-			chunk.Status = core.ChunkStatusFailed
-			return err
-		}
-
-		// Update downloaded bytes
-		downloaded += int64(n)
-		chunk.Downloaded = downloaded
-
-		// Log progress every 1MB
-		if downloaded%(1024*1024) == 0 {
-			logger.Infof("Chunk %s progress: Downloaded=%d bytes", chunk.ID, downloaded)
 		}
 	}
 
@@ -943,20 +977,11 @@ func getFilenameFromResponse(resp *http.Response, url string) string {
 	return "download"
 }
 
-// sanitizeFilename sanitizes a filename to make it valid
+// sanitizeFilename sanitizes a filename to make it valid and safe.
+// 委托给 utils.SanitizeRemoteFilename，统一处理 ../ 目录穿越、控制字符、
+// Windows 保留名与超长文件名等问题。
 func sanitizeFilename(filename string) string {
-	// Remove or replace invalid characters
-	invalidChars := []string{"<", ">", ":", "\"", "/", "\\", "|", "?", "*"}
-	for _, char := range invalidChars {
-		filename = strings.ReplaceAll(filename, char, "_")
-	}
-	// Trim whitespace
-	filename = strings.TrimSpace(filename)
-	// Ensure filename is not empty
-	if filename == "" {
-		filename = "download"
-	}
-	return filename
+	return utils.SanitizeRemoteFilename(filename)
 }
 
 // simulateProgress simulates progress for testing

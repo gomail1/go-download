@@ -12,9 +12,9 @@ import (
 
 // CategoryResponse 分类响应
 type CategoryResponse struct {
-	Success bool         `json:"success"`
-	Message string       `json:"message,omitempty"`
-	Data    interface{}  `json:"data,omitempty"`
+	Success bool        `json:"success"`
+	Message string      `json:"message,omitempty"`
+	Data    interface{} `json:"data,omitempty"`
 }
 
 // writeAuthError 返回未登录/无权限的JSON响应
@@ -100,7 +100,7 @@ func CategoriesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if req.Icon == "" {
-			req.Icon = "📁"
+			req.Icon = "folder"
 		}
 
 		category, err := cm.CreateCategory(req.Name, req.Icon)

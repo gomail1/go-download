@@ -39,6 +39,8 @@ func main() {
 	httpsPort := flag.Int("https-port", 0, "HTTPS端口")
 	certFile := flag.String("cert-file", "", "SSL证书文件路径")
 	keyFile := flag.String("key-file", "", "SSL密钥文件路径")
+	rebuildIPStats := flag.Bool("rebuild-ipstats", false, "从历史日志强制重建IP下载统计(自动备份+保留封禁,修复被旧版重复计数污染的数据)")
+	rebuildStats := flag.Bool("rebuild-stats", false, "从历史日志强制重建文件下载统计 stats.json(自动备份,修复被旧版分片重复计数污染的累计次数/带宽/热力图)")
 	flag.Parse()
 
 	// 初始化随机数种子
@@ -107,7 +109,7 @@ func main() {
 			if _, err := os.Stat(configPath); err == nil {
 				// 配置文件存在，先备份
 				if input, err := os.ReadFile(configPath); err == nil {
-					os.WriteFile(backupPath, input, 0644)
+					os.WriteFile(backupPath, input, 0600)
 					logger.Infof("配置文件已备份: %s", backupPath)
 				}
 			}
@@ -125,6 +127,14 @@ func main() {
 				logger.Infof("========================================")
 			}
 		}
+	}
+
+	// 启动时强制升级明文密码为 bcrypt（v1.3.0 安全加固：#13）
+	// 放在 API 密钥自动生成之后，确保默认配置中的明文密码也被覆盖
+	if upgraded, err := session.UpgradeAllPlaintextPasswords(); err != nil {
+		logger.Warnf("警告: 明文密码升级为 bcrypt 失败: %v", err)
+	} else if upgraded > 0 {
+		logger.Warnf("安全提示: 检测到 %d 个用户仍为明文密码存储，已自动升级为 bcrypt 哈希", upgraded)
 	}
 
 	// 初始化事件系统
@@ -226,6 +236,26 @@ func main() {
 	// 初始化统计数据
 	handlers.InitStats()
 
+	// 可选:强制重建文件下载统计 stats.json(修复被旧版 Range 分片重复计数污染的
+	// 首页累计下载/文件列表次数/热力图,含"每次分片整文件大小累加"造成的带宽虚高)
+	// 必须在 InitStats 之后执行(statsDataFile 路径由 InitStats 初始化);自动备份 stats.json.bak.<时间戳>
+	// 触发方式:启动参数 -rebuild-stats,或配置文件 server.rebuild_stats_on_boot=true
+	if *rebuildStats || config.AppConfig.Server.RebuildStatsOnBoot {
+		if _, err := handlers.RebuildFileStatsFromLogs(); err != nil {
+			logger.Warnf("警告: 文件下载统计重建失败: %v", err)
+		}
+	}
+
+	// 可选:强制重建IP下载统计(修复被旧版回填重复计数污染的存量数据)
+	// 必须在 InitIPStats 之前执行;内部自动备份旧 ip_stats.json 并保留封禁状态
+	// 触发方式:启动参数 -rebuild-ipstats,或配置文件 server.rebuild_ipstats_on_boot=true
+	// (后者面向不便修改启动参数的部署形态: Docker/fnOS/Windows 服务,改一次 JSON + 重启即可)
+	if *rebuildIPStats || config.AppConfig.Server.RebuildIPStatsOnBoot {
+		if _, _, err := handlers.RebuildIPStatsFromLogs(); err != nil {
+			logger.Warnf("警告: IP下载统计重建失败: %v", err)
+		}
+	}
+
 	// 初始化IP下载统计
 	handlers.InitIPStats()
 
@@ -237,6 +267,10 @@ func main() {
 	if err := utils.InitIconCache(iconCacheDir); err != nil {
 		logger.Warnf("初始化图标缓存失败: %v", err)
 	}
+
+	// 图标预提取循环（不阻塞启动）：启动首扫一次，之后每 60s 增量重扫下载目录，
+	// 使新上传/后台批量添加/直接拷入的可执行文件自动提取缓存；首次访问懒提取仍作兜底
+	go handlers.StartIconPreloadLoop()
 
 	// 启动文件缓存定期清理任务
 	handlers.StartCacheCleanupTask()
@@ -274,6 +308,11 @@ func main() {
 	http.HandleFunc("/api/ip/unblock", handlers.APIUnblockIP)
 	http.HandleFunc("/api/ip/limit-config", handlers.APIGetIPLimitConfig)
 	http.HandleFunc("/api/ip/limit-config/update", handlers.APIUpdateIPLimitConfig)
+	// IP 统计自检修复(管理界面「自检修复」):只读对账 + 按日志重建
+	http.HandleFunc("/api/ip/audit", handlers.APIIPStatsAudit)
+	http.HandleFunc("/api/ip/rebuild", handlers.APIIPStatsRebuild)
+	http.HandleFunc("/api/stats/audit", handlers.APIStatsAudit)
+	http.HandleFunc("/api/stats/rebuild", handlers.APIStatsRebuild)
 	http.HandleFunc("/password-changed", handlers.PasswordChangedHandler)
 	http.HandleFunc("/api/increment-share", handlers.IncrementShareHandler)
 	http.HandleFunc("/api/stats", handlers.StatsHandler)

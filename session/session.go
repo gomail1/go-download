@@ -2,6 +2,7 @@ package session
 
 import (
 	"crypto/rand"
+	"crypto/subtle"
 	"encoding/hex"
 	"fmt"
 	"net/http"
@@ -101,42 +102,62 @@ func GetCurrentUser(r *http.Request) *Session {
 		return nil
 	}
 
-	sessionMux.Lock()
-	defer sessionMux.Unlock()
-
+	// 大部分请求只需读锁即可完成校验，避免每个请求在会话读取处被串行化（原实现使用写锁）
+	sessionMux.RLock()
 	session, exists := sessions[cookie.Value]
+	var (
+		loginTime time.Time
+		username  string
+		passHash  string
+	)
+	if exists {
+		loginTime = session.LoginTime
+		username = session.Username
+		passHash = session.PasswordHash
+	}
+	sessionMux.RUnlock()
+
 	if !exists {
 		return nil
 	}
 
 	// 检查会话是否过期（24小时）
-	if time.Since(session.LoginTime) > 24*time.Hour {
-		delete(sessions, cookie.Value)
+	if time.Since(loginTime) > 24*time.Hour {
+		invalidateSession(cookie.Value)
 		return nil
 	}
 
 	// 验证用户是否存在于配置中
 	config.UsersMu.RLock()
-	userConfig, exists := config.UserConfigMap[session.Username]
+	userConfig, exists := config.UserConfigMap[username]
 	config.UsersMu.RUnlock()
 	if !exists {
 		// 用户不存在于配置中，清除会话
-		delete(sessions, cookie.Value)
+		invalidateSession(cookie.Value)
 		return nil
 	}
 
 	// 验证密码哈希是否一致
 	currentPasswordHash := getPasswordHash(userConfig.Password)
-	if session.PasswordHash != currentPasswordHash {
+	if passHash != currentPasswordHash {
 		// 密码已修改，清除会话
-		delete(sessions, cookie.Value)
+		invalidateSession(cookie.Value)
 		return nil
 	}
 
-	// 更新会话信息（如果有变化）
+	// 更新会话信息（如果有变化）—— 仅此处需要写锁
+	sessionMux.Lock()
 	session.MaxFileSize = userConfig.MaxFileSize
+	sessionMux.Unlock()
 
 	return session
+}
+
+// invalidateSession 在独立的写锁中删除指定会话，避免在读锁区间内尝试升级为写锁
+func invalidateSession(id string) {
+	sessionMux.Lock()
+	delete(sessions, id)
+	sessionMux.Unlock()
 }
 
 // 辅助函数：验证会话的有效性（包括密码验证）
@@ -196,8 +217,8 @@ func VerifyPassword(inputPassword, storedPassword string) bool {
 		err := bcrypt.CompareHashAndPassword([]byte(storedPassword), []byte(inputPassword))
 		return err == nil
 	}
-	// 否则是明文密码，直接比较
-	return inputPassword == storedPassword
+	// 否则是明文密码，恒定时间比较，避免时序侧信道泄露密码长度/内容
+	return subtle.ConstantTimeCompare([]byte(inputPassword), []byte(storedPassword)) == 1
 }
 
 // UpgradePasswordToBcrypt 将用户的明文密码升级为bcrypt哈希
@@ -250,6 +271,59 @@ func UpgradePasswordToBcrypt(username string) error {
 	}
 
 	return nil
+}
+
+// UpgradeAllPlaintextPasswords 启动时批量将明文密码升级为 bcrypt 哈希。
+// 空密码用户（如无登录权限的 download 用户）跳过，避免改变"空密码"语义。
+// 返回实际升级的用户数；无明文密码时返回 0。
+func UpgradeAllPlaintextPasswords() (int, error) {
+	// 第一步：持锁快照明文密码用户
+	type plainUser struct{ username, plain string }
+	var targets []plainUser
+	config.UsersMu.RLock()
+	for _, u := range config.AppConfig.Users {
+		if u.Password != "" && !IsBcryptHash(u.Password) {
+			targets = append(targets, plainUser{u.Username, u.Password})
+		}
+	}
+	config.UsersMu.RUnlock()
+
+	if len(targets) == 0 {
+		return 0, nil
+	}
+
+	// 第二步：锁外逐个哈希（bcrypt cost 10 较耗时，避免长时间持锁）
+	hashed := make(map[string]string, len(targets))
+	for _, t := range targets {
+		h, err := HashPassword(t.plain)
+		if err != nil {
+			return 0, fmt.Errorf("哈希用户 %s 密码失败: %w", t.username, err)
+		}
+		hashed[t.username] = h
+	}
+
+	// 第三步：写回（按 username 定位，期间若已被并发改为 bcrypt 则跳过）
+	upgraded := 0
+	config.UsersMu.Lock()
+	for i := range config.AppConfig.Users {
+		u := &config.AppConfig.Users[i]
+		if h, ok := hashed[u.Username]; ok && !IsBcryptHash(u.Password) {
+			u.Password = h
+			upgraded++
+		}
+	}
+	if upgraded > 0 {
+		config.SyncUserConfigMapLocked()
+	}
+	config.UsersMu.Unlock()
+
+	// 第四步：释放锁后保存配置
+	if upgraded > 0 {
+		if err := config.SaveConfig(); err != nil {
+			return upgraded, fmt.Errorf("保存升级后配置失败: %w", err)
+		}
+	}
+	return upgraded, nil
 }
 
 // 辅助函数：设置会话

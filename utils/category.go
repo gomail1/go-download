@@ -101,15 +101,28 @@ func (cm *CategoryManager) load() {
 		json.Unmarshal(data, &cm.categories)
 	}
 
-	// 如果没有分类，创建默认分类
+	// 图标统一迁移：旧版分类图标存储为 emoji（📁💿💻📦📄…），现统一为类型键（folder/program/iso/…）
+	migrated := false
+	for i := range cm.categories {
+		norm := NormalizeCategoryIcon(cm.categories[i].Icon)
+		if norm != cm.categories[i].Icon {
+			cm.categories[i].Icon = norm
+			migrated = true
+		}
+	}
+
+	// 如果没有分类，创建默认分类（图标为类型键，与文件类型图标同源）
 	if len(cm.categories) == 0 {
 		cm.categories = []Category{
-			{ID: "default", Name: "全部", Icon: "📁", Sort: 0, CreatedAt: time.Now().Format("2006-01-02 15:04:05")},
-			{ID: "software", Name: "常用软件", Icon: "💿", Sort: 1, CreatedAt: time.Now().Format("2006-01-02 15:04:05")},
-			{ID: "system", Name: "系统镜像", Icon: "💻", Sort: 2, CreatedAt: time.Now().Format("2006-01-02 15:04:05")},
-			{ID: "archive", Name: "压缩包", Icon: "📦", Sort: 3, CreatedAt: time.Now().Format("2006-01-02 15:04:05")},
-			{ID: "document", Name: "办公文档", Icon: "📄", Sort: 4, CreatedAt: time.Now().Format("2006-01-02 15:04:05")},
+			{ID: "default", Name: "全部", Icon: "folder", Sort: 0, CreatedAt: time.Now().Format("2006-01-02 15:04:05")},
+			{ID: "software", Name: "常用软件", Icon: "program", Sort: 1, CreatedAt: time.Now().Format("2006-01-02 15:04:05")},
+			{ID: "system", Name: "系统镜像", Icon: "iso", Sort: 2, CreatedAt: time.Now().Format("2006-01-02 15:04:05")},
+			{ID: "archive", Name: "压缩包", Icon: "archive", Sort: 3, CreatedAt: time.Now().Format("2006-01-02 15:04:05")},
+			{ID: "document", Name: "办公文档", Icon: "word", Sort: 4, CreatedAt: time.Now().Format("2006-01-02 15:04:05")},
 		}
+		cm.saveCategories()
+	} else if migrated {
+		// 存量 emoji 图标已翻译为类型键，落盘升级
 		cm.saveCategories()
 	}
 
@@ -196,7 +209,7 @@ func (cm *CategoryManager) CreateCategory(name, icon string) (*Category, error) 
 	category := Category{
 		ID:        id,
 		Name:      name,
-		Icon:      icon,
+		Icon:      NormalizeCategoryIcon(icon),
 		Sort:      maxSort + 1,
 		CreatedAt: time.Now().Format("2006-01-02 15:04:05"),
 	}
@@ -222,7 +235,7 @@ func (cm *CategoryManager) UpdateCategory(id, name, icon string) (*Category, err
 			}
 
 			cm.categories[i].Name = name
-			cm.categories[i].Icon = icon
+			cm.categories[i].Icon = NormalizeCategoryIcon(icon)
 			cm.saveCategories()
 			return &cm.categories[i], nil
 		}

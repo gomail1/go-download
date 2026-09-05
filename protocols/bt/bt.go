@@ -19,6 +19,7 @@ import (
 	"go-download-server/internal/config"
 	"go-download-server/internal/core"
 	"go-download-server/internal/logger"
+	"go-download-server/utils"
 )
 
 // maxTorrentFileSize 限制从远程下载的 .torrent 种子文件大小（5MB），防止恶意超大文件撑爆内存
@@ -29,6 +30,198 @@ var (
 	sharedClientOnce sync.Once
 	sharedClientErr  error
 )
+
+// 公共Tracker服务器列表 - 用于磁力链接节点发现
+// 二维数组：第一维是层级(tier)，同一层级内的tracker是备选关系
+var defaultTrackers = [][]string{
+	{
+		"udp://tracker.opentrackr.org:1337/announce",
+		"udp://open.stealth.si:80/announce",
+		"udp://tracker.torrent.eu.org:451/announce",
+		"udp://exodus.desync.com:6969/announce",
+		"udp://tracker.moeking.me:6969/announce",
+		"udp://opentracker.i2p.rocks:6969/announce",
+		"udp://tracker.internetwarriors.net:1337/announce",
+		"udp://tracker.leech.ie:1337/announce",
+		"udp://tracker.birkenwald.de:6969/announce",
+		"udp://tracker.tiny-vps.com:6969/announce",
+	},
+}
+
+// 动态Tracker列表相关配置
+const (
+	trackerListURL      = "https://tracker.adysec.com/trackers_best.txt" // 高质量Tracker列表源
+	trackerCacheFile    = "config/trackers_cache.txt"                       // 本地缓存文件
+	trackerCacheTimeout = 24 * time.Hour                                     // 缓存有效期24小时
+	trackerMaxCount     = 100                                                 // 最多使用的Tracker数量
+	trackerHTTPMaxCount = 50                                                  // HTTP/HTTPS Tracker最大数量
+	trackerUDPMaxCount  = 50                                                  // UDP/WSS Tracker最大数量
+)
+
+var (
+	dynamicTrackers     [][]string // 动态获取的Tracker列表
+	dynamicTrackersOnce sync.Once  // 确保只初始化一次
+)
+
+// getDynamicTrackers 获取动态Tracker列表（优先远程，失败则缓存，再失败则默认）
+func getDynamicTrackers() [][]string {
+	dynamicTrackersOnce.Do(func() {
+		// 1. 尝试从远程获取最新Tracker列表
+		trackers, err := fetchTrackersFromRemote()
+		if err == nil && len(trackers) > 0 {
+			dynamicTrackers = [][]string{trackers}
+			logger.Infof("从远程获取到 %d 个高质量Tracker", len(trackers))
+			// 保存到缓存
+			saveTrackersToCache(trackers)
+			return
+		}
+		logger.Warnf("远程获取Tracker失败: %v，尝试加载本地缓存", err)
+
+		// 2. 尝试从本地缓存加载
+		trackers, err = loadTrackersFromCache()
+		if err == nil && len(trackers) > 0 {
+			dynamicTrackers = [][]string{trackers}
+			logger.Infof("从本地缓存加载到 %d 个Tracker", len(trackers))
+			return
+		}
+		logger.Warnf("本地缓存加载失败: %v，使用内置默认Tracker列表", err)
+
+		// 3. 使用内置默认列表
+		dynamicTrackers = defaultTrackers
+		logger.Infof("使用内置默认Tracker列表（%d个）", len(defaultTrackers[0]))
+	})
+
+	return dynamicTrackers
+}
+
+// fetchTrackersFromRemote 从远程获取Tracker列表（按协议混合，确保HTTP和UDP都有）
+func fetchTrackersFromRemote() ([]string, error) {
+	client := &http.Client{
+		Timeout: 15 * time.Second,
+	}
+
+	resp, err := client.Get(trackerListURL)
+	if err != nil {
+		return nil, fmt.Errorf("请求失败: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("HTTP状态码: %d", resp.StatusCode)
+	}
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("读取响应失败: %w", err)
+	}
+
+	// 按协议类型分别收集Tracker
+	var httpTrackers []string  // HTTP/HTTPS协议
+	var udpTrackers []string   // UDP/WSS协议
+	seen := make(map[string]bool)
+
+	lines := strings.Split(string(body), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		// 去重
+		if seen[line] {
+			continue
+		}
+		seen[line] = true
+
+		// 按协议分类
+		if strings.HasPrefix(line, "http://") || strings.HasPrefix(line, "https://") {
+			if len(httpTrackers) < trackerHTTPMaxCount {
+				httpTrackers = append(httpTrackers, line)
+			}
+		} else if strings.HasPrefix(line, "udp://") || strings.HasPrefix(line, "wss://") {
+			if len(udpTrackers) < trackerUDPMaxCount {
+				udpTrackers = append(udpTrackers, line)
+			}
+		}
+	}
+
+	// 混合Tracker：先UDP后HTTP（国外服务器UDP效果更好），交替排列
+	var mixedTrackers []string
+	maxLen := len(httpTrackers)
+	if len(udpTrackers) > maxLen {
+		maxLen = len(udpTrackers)
+	}
+	for i := 0; i < maxLen; i++ {
+		if i < len(udpTrackers) {
+			mixedTrackers = append(mixedTrackers, udpTrackers[i])
+		}
+		if i < len(httpTrackers) {
+			mixedTrackers = append(mixedTrackers, httpTrackers[i])
+		}
+	}
+
+	// 限制总数
+	if len(mixedTrackers) > trackerMaxCount {
+		mixedTrackers = mixedTrackers[:trackerMaxCount]
+	}
+
+	if len(mixedTrackers) == 0 {
+		return nil, fmt.Errorf("未解析到有效的Tracker")
+	}
+
+	logger.Infof("Tracker列表统计: UDP/WSS=%d个, HTTP/HTTPS=%d个, 合计=%d个",
+		len(udpTrackers), len(httpTrackers), len(mixedTrackers))
+
+	return mixedTrackers, nil
+}
+
+// saveTrackersToCache 保存Tracker列表到本地缓存
+func saveTrackersToCache(trackers []string) {
+	content := strings.Join(trackers, "\n")
+	err := os.WriteFile(trackerCacheFile, []byte(content), 0644)
+	if err != nil {
+		logger.Warnf("保存Tracker缓存失败: %v", err)
+	}
+}
+
+// loadTrackersFromCache 从本地缓存加载Tracker列表
+func loadTrackersFromCache() ([]string, error) {
+	// 检查缓存文件是否存在且未过期
+	info, err := os.Stat(trackerCacheFile)
+	if err != nil {
+		return nil, fmt.Errorf("缓存文件不存在: %w", err)
+	}
+
+	if time.Since(info.ModTime()) > trackerCacheTimeout {
+		return nil, fmt.Errorf("缓存已过期（%v）", time.Since(info.ModTime()))
+	}
+
+	// 读取缓存文件
+	content, err := os.ReadFile(trackerCacheFile)
+	if err != nil {
+		return nil, fmt.Errorf("读取缓存失败: %w", err)
+	}
+
+	// 解析Tracker列表
+	var trackers []string
+	lines := strings.Split(string(content), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			trackers = append(trackers, line)
+		}
+	}
+
+	if len(trackers) == 0 {
+		return nil, fmt.Errorf("缓存文件为空")
+	}
+
+	// 限制数量
+	if len(trackers) > trackerMaxCount {
+		trackers = trackers[:trackerMaxCount]
+	}
+
+	return trackers, nil
+}
 
 type BTClient struct {
 	client *torrent.Client
@@ -194,6 +387,10 @@ func (b *BTProtocol) GetMetadata(ctx context.Context, url string) (*core.Metadat
 		if addErr != nil {
 			return nil, fmt.Errorf("failed to add magnet link after %d attempts: %v", maxRetries, addErr)
 		}
+		// 为磁力链接添加公共Tracker服务器
+		if t != nil {
+			t.AddTrackers(getDynamicTrackers())
+		}
 	} else {
 		// 检查是否是torrent文件URL
 		isTorrentFile := strings.HasSuffix(lowerURL, ".torrent") ||
@@ -292,7 +489,7 @@ func (b *BTProtocol) GetMetadata(ctx context.Context, url string) (*core.Metadat
 
 	// 构建元数据响应
 	metadata := &core.Metadata{
-		Filename: torrentInfo.Name,
+		Filename: utils.SanitizeRemoteFilename(torrentInfo.Name),
 		Size:     torrentInfo.TotalLength(),
 		MimeType: "application/x-bittorrent",
 	}
@@ -356,6 +553,10 @@ func (b *BTProtocol) Download(ctx context.Context, task *core.Task, progress cha
 		if err != nil {
 			return fmt.Errorf("failed to add magnet link: %v", err)
 		}
+		// 为磁力链接添加公共Tracker服务器，加速节点发现
+		trackers := getDynamicTrackers()
+		downloadTorrent.AddTrackers(trackers)
+		logger.Infof("已为磁力链接任务 %s 添加 %d 个Tracker（动态获取）", task.ID, len(trackers[0]))
 	} else if strings.HasSuffix(lowerURL, ".torrent") {
 		// Handle torrent file URL
 		if strings.HasPrefix(lowerURL, "http://") || strings.HasPrefix(lowerURL, "https://") {
@@ -416,6 +617,12 @@ func (b *BTProtocol) Download(ctx context.Context, task *core.Task, progress cha
 	if info == nil {
 		err = fmt.Errorf("failed to get torrent info after GotInfo signal")
 		return err
+	}
+
+	// 安全校验：拒绝包含路径穿越（../）、绝对路径或反斜杠的种子名称，
+	// 防止 bit-torrent 客户端将文件写入 baseSavePath 之外的位置。
+	if !utils.IsSafePathComponent(info.Name) {
+		return fmt.Errorf("非法的种子名称（可能包含路径穿越）: %s", info.Name)
 	}
 
 	// Start downloading all files
@@ -585,8 +792,12 @@ downloadComplete:
 		finalInfo = info
 	}
 
-	// 获取下载的文件/目录路径
-	finalPath := filepath.Join(baseSavePath, finalInfo.Name)
+	// 获取下载的文件/目录路径（清洗文件名并校验仍在保存目录内，防目录逃逸）
+	finalName := utils.SanitizeRemoteFilename(finalInfo.Name)
+	finalPath := filepath.Join(baseSavePath, finalName)
+	if !utils.EnsureWithinDir(baseSavePath, finalPath) {
+		return fmt.Errorf("种子最终路径超出保存目录: %s", finalPath)
+	}
 	partPath := finalPath + ".part"
 
 	// 检查是否是目录类型的种子

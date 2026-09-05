@@ -23,13 +23,13 @@ type UserConfig struct {
 }
 
 type ServerConfig struct {
-	Port        int    `json:"port"`
-	HttpsPort   int    `json:"https_port"`
-	CertFile    string `json:"cert_file"`
-	KeyFile     string `json:"key_file"`
-	DownloadDir string `json:"download_dir"`
-	PendingDir  string `json:"pending_dir"`
-	LogDir      string `json:"log_dir"`
+	Port         int    `json:"port"`
+	HttpsPort    int    `json:"https_port"`
+	CertFile     string `json:"cert_file"`
+	KeyFile      string `json:"key_file"`
+	DownloadDir  string `json:"download_dir"`
+	PendingDir   string `json:"pending_dir"`
+	LogDir       string `json:"log_dir"`
 	IconCacheDir string `json:"icon_cache_dir"`
 	// TrustProxy 仅当部署于可信反向代理（nginx 等）之后时置 true，
 	// 此时才信任 X-Forwarded-For / X-Real-IP 头；直连部署保持 false，
@@ -38,8 +38,18 @@ type ServerConfig struct {
 	// APIKey 外部程序调用 /api/stats 等接口的独立密钥（可选）。
 	// 配置后优先使用该密钥认证，不再用管理员密码；未配置时保持向后兼容。
 	APIKey string `json:"api_key"`
-	LogFile     string `json:"log_file"`
-	ServerName  string `json:"server_name"`
+	// RebuildIPStatsOnBoot 升级后一次性修复开关：置 true 启动时，在初始化阶段从历史日志
+	// 强制重建 IP 下载统计（自动备份旧 ip_stats.json、保留封禁列表），用于修复旧版
+	// 「Range 分片重复计数 + 启动回填叠加」污染的存量数据。等价于启动参数 -rebuild-ipstats，
+	// 供不便修改启动参数的环境（Docker/fnOS/Windows 服务等）使用。重建完成即可改回 false。
+	RebuildIPStatsOnBoot bool `json:"rebuild_ipstats_on_boot"`
+	// RebuildStatsOnBoot 文件下载统计重建开关：置 true 启动时，在初始化阶段从历史日志
+	// 按 (IP+文件) 60s 合并口径重建 stats.json（自动备份 stats.json.bak.<时间戳>），修复
+	// 旧版「每个 Range 分片传输 +1 次数/热力点 + 整文件大小累加」造成的首页累计下载、
+	// 文件列表次数与热力图虚高。等价于启动参数 -rebuild-stats。重建完成即可改回 false。
+	RebuildStatsOnBoot bool   `json:"rebuild_stats_on_boot"`
+	LogFile            string `json:"log_file"`
+	ServerName         string `json:"server_name"`
 }
 
 // QuadFetch 服务配置
@@ -306,7 +316,7 @@ func SaveConfig() error {
 		}
 
 		configPath := filepath.Join(configDir, "config.json")
-		if err := atomicWriteFile(configPath, buf.Bytes(), 0644); err == nil {
+		if err := atomicWriteFile(configPath, buf.Bytes(), 0600); err == nil {
 			return nil
 		}
 	}
@@ -320,7 +330,7 @@ func SaveConfig() error {
 	}
 
 	configPath := filepath.Join(configDir, "config.json")
-	if err := atomicWriteFile(configPath, buf.Bytes(), 0644); err != nil {
+	if err := atomicWriteFile(configPath, buf.Bytes(), 0600); err != nil {
 		return fmt.Errorf("无法写入配置文件: %w", err)
 	}
 

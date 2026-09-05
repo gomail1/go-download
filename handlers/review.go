@@ -130,7 +130,7 @@ func ReviewHandler(w http.ResponseWriter, r *http.Request) {
 
 					// 为当前文件单独构建目录选择下拉框HTML
 					// 根据文件的上传路径（relPath）设置默认选中值
-					fileDirSelectHTML := `<select name="target_dir" class="form-control" style="width: 100px; margin-right: 5px;">`
+					fileDirSelectHTML := `<select name="target_dir" class="form-control" style="width: 150px; margin-right: 5px;">`
 					for _, dir := range dirList {
 						selected := ""
 						// 默认选中文件的上传路径

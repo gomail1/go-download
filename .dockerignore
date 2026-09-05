@@ -36,9 +36,11 @@ config/categories.json
 config/file_category_mappings.json
 config/ip_stats.json
 config/icons/
+config/trackers_cache.txt
 
 # 任务目录（运行时生成）
 tasks/
+config/tasks/
 
 # 日志文件
 logs/
@@ -77,6 +79,9 @@ build/
 .git/
 .gitignore
 .dockerignore
+
+# WorkBuddy 工作目录（开发工具，不需要打包）
+.workbuddy/
 
 # 文档和演示文件
 *.md

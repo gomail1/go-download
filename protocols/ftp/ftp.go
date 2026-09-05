@@ -13,6 +13,7 @@ import (
 
 	"go-download-server/internal/core"
 	"go-download-server/internal/logger"
+	"go-download-server/utils"
 )
 
 // FTPProtocol implements the core.Protocol interface for FTP
@@ -62,7 +63,7 @@ func (f *FTPProtocol) GetMetadata(ctx context.Context, url string) (*core.Metada
 	// Example: ftp://user:password@host:port/path
 	// For now, we'll just return basic metadata
 	metadata := &core.Metadata{
-		Filename: filepath.Base(url),
+		Filename: utils.SanitizeRemoteFilename(filepath.Base(url)),
 		Size:     -1,                         // Unknown size for now
 		MimeType: "application/octet-stream", // Default MIME type
 		ProtocolSpecific: map[string]interface{}{
@@ -106,7 +107,11 @@ func (f *FTPProtocol) Download(ctx context.Context, task *core.Task, progress ch
 	}
 
 	// Create destination file (不使用O_TRUNC，支持断点续传)
-	destPath := task.Config.SavePath + "/" + task.Metadata.Filename
+	// 经清洗与目录逃逸校验，确保写入位置始终在 SavePath 内
+	destPath, err := utils.SafeJoinFile(task.Config.SavePath, task.Metadata.Filename)
+	if err != nil {
+		return err
+	}
 	logger.Infof("Creating destination file: %s", destPath)
 
 	// 确保目录存在

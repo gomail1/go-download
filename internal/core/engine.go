@@ -2,9 +2,12 @@ package core
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math/rand"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -14,6 +17,7 @@ import (
 	"go-download-server/internal/config"
 	"go-download-server/internal/event"
 	"go-download-server/internal/logger"
+	"go-download-server/utils"
 )
 
 // Engine defines the core engine interface
@@ -64,6 +68,7 @@ type QuadEngine struct {
 	isRunning      bool
 	ctx            context.Context
 	cancel         context.CancelFunc
+	wg             sync.WaitGroup // 跟踪进行中的下载协程，便于 Close 优雅等待
 }
 
 // NewQuadEngine creates a new QuadEngine instance
@@ -71,8 +76,8 @@ func NewQuadEngine(protocolMgr ProtocolManager) *QuadEngine {
 	// Initialize random seed
 	rand.Seed(time.Now().UnixNano())
 
-	// Create default data directory - 去掉 .quadfetch 前缀，直接使用 tasks 目录
-	dataDir := "tasks"
+	// Create default data directory - 任务数据统一存放到 config/tasks 目录下
+	dataDir := filepath.Join("config", "tasks")
 	// 支持通过环境变量自定义数据目录
 	if envDataDir := os.Getenv("QUADFETCH_DATA_DIR"); envDataDir != "" {
 		dataDir = envDataDir
@@ -180,36 +185,28 @@ func NewQuadEngine(protocolMgr ProtocolManager) *QuadEngine {
 		cancel:         cancel,
 	}
 
-	// Auto-start unfinished tasks after engine is created
+	// Auto-start unfinished tasks after engine is created.
+	// 覆盖进程崩溃/强杀可能遗留的全部中间态：
+	//   waiting     —— 已入队但尚未开始下载
+	//   preparing   —— 已入队、正在解析元数据/切分分块阶段被中断
+	//                   （此前该状态不在恢复范围内，重启后任务会永久卡死在 preparing，用户只能删任务重建，#5）
+	//   downloading —— 下载中断开；HTTP 多线程下载会依据 .downloading.json 自动续传
 	for _, task := range tasks {
+		recoverStatus := task.Status // 锁外取值供日志使用，避免与 StartTask 并发写产生读竞争
 		switch task.Status {
-		case TaskStatusDownloading:
-			// 自动重新启动下载中的任务
+		case TaskStatusDownloading, TaskStatusPreparing, TaskStatusWaiting:
+			// 自动重新启动未完成任务
 			go func(t *Task) {
+				logger.Infof("Recovering unfinished task %s from status %s after restart", t.ID, recoverStatus)
 				// 创建新的上下文，避免主上下文被取消
 				taskCtx, cancel := context.WithCancel(context.Background())
 				defer cancel()
 				if err := e.StartTask(taskCtx, t.ID); err != nil {
 					logger.Errorf("Failed to restart task %s: %v", t.ID, err)
-					// 更新任务状态为失败
+					// 更新任务状态为失败并记录原因，避免任务悬在中间态
 					e.mu.Lock()
 					t.Status = TaskStatusFailed
-					e.mu.Unlock()
-					// 保存任务状态
-					e.persistenceMgr.SaveTask(t)
-				}
-			}(task)
-		case TaskStatusWaiting:
-			// 自动启动等待中的任务
-			go func(t *Task) {
-				// 创建新的上下文，避免主上下文被取消
-				taskCtx, cancel := context.WithCancel(context.Background())
-				defer cancel()
-				if err := e.StartTask(taskCtx, t.ID); err != nil {
-					logger.Errorf("Failed to start task %s: %v", t.ID, err)
-					// 更新任务状态为失败
-					e.mu.Lock()
-					t.Status = TaskStatusFailed
+					t.Error = "重启自动恢复失败: " + err.Error()
 					e.mu.Unlock()
 					// 保存任务状态
 					e.persistenceMgr.SaveTask(t)
@@ -230,6 +227,24 @@ func (e *QuadEngine) AddTask(ctx context.Context, req *AddTaskRequest) (*Task, e
 	// Validate request
 	if req.URL == "" {
 		return nil, errors.New("url is required")
+	}
+
+	// SSRF 防护：仅允许 http/https/ftp/magnet 协议；
+	// 对远程地址校验目标主机非内网/回环/链路本地/保留地址；
+	// 拒绝 file:// 等危险协议；本地文件路径（如上传的 .torrent 文件）放行。
+	if u, parseErr := url.Parse(req.URL); parseErr == nil {
+		switch strings.ToLower(u.Scheme) {
+		case "http", "https", "ftp", "magnet":
+			if err := utils.ValidateRemoteDownloadURL(req.URL); err != nil {
+				return nil, err
+			}
+		case "file":
+			return nil, errors.New("不允许使用 file:// 协议")
+		case "":
+			// 本地文件路径（如上传的 .torrent 文件），跳过 SSRF 校验
+		default:
+			return nil, fmt.Errorf("不支持的下载协议: %s", u.Scheme)
+		}
 	}
 
 	// Find appropriate protocol
@@ -304,7 +319,7 @@ func (e *QuadEngine) AddTask(ctx context.Context, req *AddTaskRequest) (*Task, e
 	// Publish event
 	event.Publish(event.Event{
 		Type: event.EventTaskCreated,
-		Data: task,
+		Data: snapshotTask(task),
 	})
 
 	logger.Infof("Task added: %s, protocol: %s", task.ID, protocolName)
@@ -401,8 +416,9 @@ func (e *QuadEngine) StartTask(ctx context.Context, id string) error {
 	}
 	e.mu.Unlock()
 
-	// Create a new context for this task
-	taskCtx, cancel := context.WithCancel(context.Background())
+	// Create a new context for this task，派生自引擎上下文，
+	// 这样在引擎 Close() 取消 e.ctx 时可一并终止进行中的下载协程。
+	taskCtx, cancel := context.WithCancel(e.ctx)
 	e.mu.Lock()
 	task.cancelFunc = cancel
 	e.mu.Unlock()
@@ -412,11 +428,11 @@ func (e *QuadEngine) StartTask(ctx context.Context, id string) error {
 	task.Status = TaskStatusPreparing
 	now := time.Now()
 	task.StartedAt = &now
-	taskCopy := *task // Create a copy for persistence
+	taskCopy := snapshotTask(task) // Create a copy for persistence
 	e.mu.Unlock()
 
 	// Save task to disk
-	err := e.persistenceMgr.SaveTask(&taskCopy)
+	err := e.persistenceMgr.SaveTask(taskCopy)
 	if err != nil {
 		logger.Errorf("Failed to save task: %v", err)
 	}
@@ -465,11 +481,11 @@ func (e *QuadEngine) StartTask(ctx context.Context, id string) error {
 			e.mu.Lock()
 			task.Status = TaskStatusFailed
 			task.Error = "获取元数据失败: " + err.Error()
-			taskCopy = *task
+			taskCopy = snapshotTask(task)
 			e.mu.Unlock()
 
 			// Save updated task
-			err = e.persistenceMgr.SaveTask(&taskCopy)
+			err = e.persistenceMgr.SaveTask(taskCopy)
 			if err != nil {
 				logger.Errorf("Failed to save task: %v", err)
 			}
@@ -479,11 +495,11 @@ func (e *QuadEngine) StartTask(ctx context.Context, id string) error {
 
 		e.mu.Lock()
 		task.Metadata = metadata
-		taskCopy = *task
+		taskCopy = snapshotTask(task)
 		e.mu.Unlock()
 
 		// Save updated task
-		err = e.persistenceMgr.SaveTask(&taskCopy)
+		err = e.persistenceMgr.SaveTask(taskCopy)
 		if err != nil {
 			logger.Errorf("Failed to save task: %v", err)
 		}
@@ -513,11 +529,11 @@ func (e *QuadEngine) StartTask(ctx context.Context, id string) error {
 		task.Progress.ETA = 0
 		task.Progress.CurrentChunk = 0
 	}
-	taskCopy = *task
+	taskCopy = snapshotTask(task)
 	e.mu.Unlock()
 
 	// Save task to disk
-	err = e.persistenceMgr.SaveTask(&taskCopy)
+	err = e.persistenceMgr.SaveTask(taskCopy)
 	if err != nil {
 		logger.Errorf("Failed to save task: %v", err)
 	}
@@ -529,20 +545,22 @@ func (e *QuadEngine) StartTask(ctx context.Context, id string) error {
 		e.mu.Lock()
 		task.Status = TaskStatusFailed
 		task.Error = "Failed to create download path: " + err.Error()
-		taskCopy = *task
+		taskCopy = snapshotTask(task)
 		e.mu.Unlock()
 		// Save task to disk
-		err = e.persistenceMgr.SaveTask(&taskCopy)
+		err = e.persistenceMgr.SaveTask(taskCopy)
 		// Publish task failed event
 		event.Publish(event.Event{
 			Type: event.EventTaskCompleted,
-			Data: task,
+			Data: snapshotTask(task),
 		})
 		return err
 	}
 
 	// Start download in a goroutine
+	e.wg.Add(1)
 	go func() {
+		defer e.wg.Done()
 		progressChan := make(chan Progress)
 
 		// Progress update handling goroutine
@@ -568,11 +586,13 @@ func (e *QuadEngine) StartTask(ctx context.Context, id string) error {
 					task.Progress.Status = progress.Status
 					task.Progress.ActivePeers = progress.ActivePeers
 					task.Progress.TotalPeers = progress.TotalPeers
+					// 在锁内生成深拷贝快照，避免与写协程共享同一批引用字段造成 data race
+					snap := snapshotTask(task)
 					e.mu.Unlock()
 					// Publish progress event
 					event.Publish(event.Event{
 						Type: event.EventTaskProgress,
-						Data: task,
+						Data: snap,
 					})
 				case <-taskCtx.Done():
 					// Context canceled, exit
@@ -592,31 +612,31 @@ func (e *QuadEngine) StartTask(ctx context.Context, id string) error {
 		// Handle download result
 		e.mu.Lock()
 
-	if err != nil {
-		// 主动取消/暂停导致的 context canceled 不算失败：
-		// PauseTask/CancelTask 已将状态置为 Paused/Cancelled，这里保持不变
-		if taskCtx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
-			if task.Status != TaskStatusPaused && task.Status != TaskStatusCancelled {
+		if err != nil {
+			// 主动取消/暂停导致的 context canceled 不算失败：
+			// PauseTask/CancelTask 已将状态置为 Paused/Cancelled，这里保持不变
+			if taskCtx.Err() != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				if task.Status != TaskStatusPaused && task.Status != TaskStatusCancelled {
+					task.Status = TaskStatusFailed
+					task.Error = err.Error()
+					e.statistics.FailedTasks++
+				}
+				logger.Infof("Task %s terminated by context cancellation (paused/cancelled)", id)
+			} else {
 				task.Status = TaskStatusFailed
 				task.Error = err.Error()
+				// 检查是否是WAF导致的失败
+				if strings.Contains(err.Error(), "context canceled") || strings.Contains(err.Error(), "timeout") {
+					task.Error = "下载失败: 可能是目标网站的WAF安全验证导致。建议：1. 在浏览器中完成验证后复制Cookie；2. 使用浏览器直接下载；3. 检查网络连接"
+				}
 				e.statistics.FailedTasks++
+				logger.Errorf("Task failed: %s, error: %v", id, err)
 			}
-			logger.Infof("Task %s terminated by context cancellation (paused/cancelled)", id)
+		} else if task.Status == TaskStatusPaused || task.Status == TaskStatusCancelled {
+			// 任务已被暂停/取消（例如 CancelTask 未及取消 ctx 时文件已下载完成），保留终态
+			logger.Infof("Task %s finished download but was paused/cancelled, keeping status %s", id, task.Status)
 		} else {
-			task.Status = TaskStatusFailed
-			task.Error = err.Error()
-			// 检查是否是WAF导致的失败
-			if strings.Contains(err.Error(), "context canceled") || strings.Contains(err.Error(), "timeout") {
-				task.Error = "下载失败: 可能是目标网站的WAF安全验证导致。建议：1. 在浏览器中完成验证后复制Cookie；2. 使用浏览器直接下载；3. 检查网络连接"
-			}
-			e.statistics.FailedTasks++
-			logger.Errorf("Task failed: %s, error: %v", id, err)
-		}
-	} else if task.Status == TaskStatusPaused || task.Status == TaskStatusCancelled {
-		// 任务已被暂停/取消（例如 CancelTask 未及取消 ctx 时文件已下载完成），保留终态
-		logger.Infof("Task %s finished download but was paused/cancelled, keeping status %s", id, task.Status)
-	} else {
-		task.Status = TaskStatusCompleted
+			task.Status = TaskStatusCompleted
 			completedAt := time.Now()
 			task.CompletedAt = &completedAt
 			e.statistics.CompletedTasks++
@@ -638,8 +658,20 @@ func (e *QuadEngine) StartTask(ctx context.Context, id string) error {
 				// Move file to pending directory only if it's not already there
 				pendingFilePath := filepath.Join(pendingDir, task.Metadata.Filename)
 				if originalFilePath != pendingFilePath {
+					// 先尝试使用Rename（同分区快速移动）
 					if err := os.Rename(originalFilePath, pendingFilePath); err != nil {
-						logger.Errorf("Failed to move file to pending directory: %v", err)
+						// Rename失败（可能是跨设备），使用复制+删除的方式
+						logger.Warnf("Rename failed (possibly cross-device), using copy+delete: %v", err)
+						if err := copyFile(originalFilePath, pendingFilePath); err != nil {
+							logger.Errorf("Failed to copy file to pending directory: %v", err)
+						} else {
+							// 复制成功后删除源文件
+							if err := os.Remove(originalFilePath); err != nil {
+								logger.Errorf("Failed to remove original file after copy: %v", err)
+							} else {
+								logger.Infof("File copied to pending directory for review: %s", pendingFilePath)
+							}
+						}
 					} else {
 						logger.Infof("File moved to pending directory for review: %s", pendingFilePath)
 					}
@@ -648,16 +680,25 @@ func (e *QuadEngine) StartTask(ctx context.Context, id string) error {
 					logger.Infof("File is already in pending directory for review: %s", pendingFilePath)
 				}
 			}
+
+			// 下载完成后清理临时文件
+			cleanupTempFilesAfterDownload(task.Config.SavePath, task.Metadata.Filename)
+		}
+
+		// 终止任务上下文，释放关联的 context 节点与资源（避免 context 泄漏）
+		if task.cancelFunc != nil {
+			task.cancelFunc()
+			task.cancelFunc = nil
 		}
 
 		// Save final task status
-		taskCopy := *task
+		taskCopy := snapshotTask(task)
 		e.mu.Unlock()
-		err = e.persistenceMgr.SaveTask(&taskCopy)
+		err = e.persistenceMgr.SaveTask(taskCopy)
 		// Publish task completed/failed event
 		event.Publish(event.Event{
 			Type: event.EventTaskCompleted,
-			Data: task,
+			Data: snapshotTask(task),
 		})
 	}()
 
@@ -673,9 +714,10 @@ func (e *QuadEngine) PauseTask(id string) error {
 		return errors.New("task not found: " + id)
 	}
 
-	if task.Status != TaskStatusDownloading {
+	// 允许在下载中或准备中（如 BT 正在获取元数据/Tracker）暂停
+	if task.Status != TaskStatusDownloading && task.Status != TaskStatusPreparing {
 		e.mu.Unlock()
-		return errors.New("task is not downloading")
+		return errors.New("task is not downloading or preparing")
 	}
 
 	// Cancel the download context to immediately stop the download
@@ -691,11 +733,11 @@ func (e *QuadEngine) PauseTask(id string) error {
 
 	// Update task status
 	task.Status = TaskStatusPaused
-	taskCopy := *task
+	taskCopy := snapshotTask(task)
 	e.mu.Unlock()
 
 	// Save task to disk
-	err := e.persistenceMgr.SaveTask(&taskCopy)
+	err := e.persistenceMgr.SaveTask(taskCopy)
 	if err != nil {
 		logger.Errorf("Failed to save task: %v", err)
 	}
@@ -720,11 +762,11 @@ func (e *QuadEngine) ResumeTask(ctx context.Context, id string) error {
 
 	// Reset task status to waiting
 	task.Status = TaskStatusWaiting
-	taskCopy := *task
+	taskCopy := snapshotTask(task)
 	e.mu.Unlock()
 
 	// Save task to disk
-	err := e.persistenceMgr.SaveTask(&taskCopy)
+	err := e.persistenceMgr.SaveTask(taskCopy)
 	if err != nil {
 		logger.Errorf("Failed to save task: %v", err)
 	}
@@ -758,11 +800,11 @@ func (e *QuadEngine) CancelTask(id string) error {
 		task.cancelFunc = nil
 	}
 
-	taskCopy := *task
+	taskCopy := snapshotTask(task)
 	e.mu.Unlock()
 
 	// Save task to disk
-	err := e.persistenceMgr.SaveTask(&taskCopy)
+	err := e.persistenceMgr.SaveTask(taskCopy)
 	if err != nil {
 		logger.Errorf("Failed to save task: %v", err)
 	}
@@ -789,20 +831,42 @@ func (e *QuadEngine) RemoveTask(id string) error {
 		logger.Infof("Cancelled download for task: %s", id)
 	}
 
+	// 保存协议实例引用，在锁外调用Cancel（避免死锁）
+	var protocolInstance Protocol
+	if task.ProtocolInstance != nil {
+		protocolInstance = task.ProtocolInstance
+	}
+
 	// Clean up protocol-specific resources (especially for BT)
-	if task.Protocol == "bittorrent" || task.Protocol == "bt" {
-		// For BT tasks, we need to clean up the torrent from the shared client
-		// This ensures the task doesn't reappear after restart
-		// The actual cleanup happens in the protocol implementation
+	if task.Protocol == "bittorrent" || task.Protocol == "bt" || task.Protocol == "magnet" {
 		logger.Infof("Cleaning up BT task resources: %s", id)
 	}
 
 	// Remove task from memory
-	taskCopy := *task // Create a copy for cleanup outside the lock
+	taskCopy := snapshotTask(task) // Create a copy for cleanup outside the lock
 	delete(e.tasks, id)
 	e.statistics.TotalTasks--
+	// 更新统计数据中的活跃任务数
+	switch taskCopy.Status {
+	case TaskStatusDownloading, TaskStatusWaiting:
+		e.statistics.ActiveTasks--
+	case TaskStatusCompleted:
+		e.statistics.CompletedTasks--
+	case TaskStatusFailed:
+		e.statistics.FailedTasks--
+	}
 	logger.Infof("Removed task from memory: %s", id)
 	e.mu.Unlock()
+
+	// 在锁外调用协议的Cancel方法，清理协议资源（BT的goroutine、网络连接等）
+	if protocolInstance != nil {
+		logger.Infof("Calling protocol Cancel for task: %s, protocol: %s", id, taskCopy.Protocol)
+		if err := protocolInstance.Cancel(); err != nil {
+			logger.Errorf("Failed to cancel protocol instance for task %s: %v", id, err)
+		} else {
+			logger.Infof("Protocol instance cancelled successfully for task: %s", id)
+		}
+	}
 
 	// Clean up temporary files and cache
 	if taskCopy.Config != nil && taskCopy.Config.SavePath != "" {
@@ -862,6 +926,75 @@ func (e *QuadEngine) RemoveTask(id string) error {
 
 		if err != nil {
 			logger.Errorf("Failed to recursively clean .part files: %v", err)
+		}
+
+		// 清理以文件名为名的目录（BT/HTTP下载会创建此目录存放.part文件）
+		if taskCopy.Metadata != nil && taskCopy.Metadata.Filename != "" {
+			fileDir := filepath.Join(taskCopy.Config.SavePath, taskCopy.Metadata.Filename)
+			if info, err := os.Stat(fileDir); err == nil && info.IsDir() {
+				// 检查目录是否为空
+				files, err := os.ReadDir(fileDir)
+				if err == nil && len(files) == 0 {
+					// 目录为空，直接删除
+					if err := os.Remove(fileDir); err != nil {
+						logger.Errorf("Failed to remove empty file directory: %s, error: %v", fileDir, err)
+					} else {
+						logger.Infof("Removed empty file directory: %s", fileDir)
+					}
+				} else if err == nil && len(files) > 0 {
+					// 目录不为空，对于BT任务直接删除整个目录（BT下载的文件都在这里）
+					if taskCopy.Protocol == "bittorrent" || taskCopy.Protocol == "bt" || taskCopy.Protocol == "magnet" {
+						logger.Infof("Removing BT download directory (not empty): %s", fileDir)
+						if err := os.RemoveAll(fileDir); err != nil {
+							logger.Errorf("Failed to remove BT download directory: %s, error: %v", fileDir, err)
+						} else {
+							logger.Infof("Removed BT download directory: %s", fileDir)
+						}
+					} else {
+						// 对于其他任务，只删除.part相关文件，保留可能的完整文件
+						logger.Infof("File directory not empty, keeping non-part files: %s (files: %d)", fileDir, len(files))
+						// 递归删除目录下所有.part文件
+						filepath.Walk(fileDir, func(path string, info os.FileInfo, err error) error {
+							if err != nil {
+								return nil
+							}
+							if !info.IsDir() && strings.HasSuffix(info.Name(), ".part") {
+								os.Remove(path)
+								logger.Infof("Removed part file in subdirectory: %s", path)
+							}
+							return nil
+						})
+						// 再次检查目录是否为空，如果为空则删除
+						files2, _ := os.ReadDir(fileDir)
+						if len(files2) == 0 {
+							os.Remove(fileDir)
+							logger.Infof("Removed file directory after cleaning part files: %s", fileDir)
+						}
+					}
+				}
+			}
+		}
+
+		// 清理.parts文件（下载进度/位图文件）
+		if taskCopy.Metadata != nil && taskCopy.Metadata.Filename != "" {
+			partsFile := filepath.Join(taskCopy.Config.SavePath, taskCopy.Metadata.Filename+".part.parts")
+			if _, err := os.Stat(partsFile); err == nil {
+				os.Remove(partsFile)
+				logger.Infof("Removed parts file: %s", partsFile)
+			}
+
+			// 清理.downloading.json状态文件（HTTP多线程下载的进度文件）
+			downloadingStateFile := filepath.Join(taskCopy.Config.SavePath, taskCopy.Metadata.Filename+".downloading.json")
+			if _, err := os.Stat(downloadingStateFile); err == nil {
+				os.Remove(downloadingStateFile)
+				logger.Infof("Removed downloading state file: %s", downloadingStateFile)
+			}
+			// 清理.downloading.json.tmp临时文件
+			downloadingStateTmpFile := downloadingStateFile + ".tmp"
+			if _, err := os.Stat(downloadingStateTmpFile); err == nil {
+				os.Remove(downloadingStateTmpFile)
+				logger.Infof("Removed downloading state tmp file: %s", downloadingStateTmpFile)
+			}
 		}
 
 		// 检查savePath目录是否为空，如果为空则删除该目录
@@ -945,25 +1078,25 @@ func (e *QuadEngine) Close() error {
 		return errors.New("engine is already closed")
 	}
 
-	// First set isRunning to false and cancel context
+	// 先将进行中的任务标记为已取消，使其下载协程在 ctx 取消后保留终态（而非标记为失败）
 	e.mu.Lock()
 	e.isRunning = false
-	e.cancel()
-	e.mu.Unlock()
-
-	// Wait a short time for goroutines to finish
-	time.Sleep(100 * time.Millisecond)
-
-	// Cancel all running tasks
-	e.mu.Lock()
 	for _, task := range e.tasks {
-		if task.Status == TaskStatusDownloading {
+		if task.Status == TaskStatusDownloading || task.Status == TaskStatusWaiting || task.Status == TaskStatusPreparing {
 			task.Status = TaskStatusCancelled
 			task.Error = "engine closed"
 		}
 	}
+	e.mu.Unlock()
+
+	// 取消引擎上下文，终止所有进行中的下载协程（taskCtx 派生自 e.ctx）
+	e.cancel()
+
+	// 等待所有下载协程真正退出，避免使用 time.Sleep 带来的竞态与不确定性
+	e.wg.Wait()
 
 	// Close all connection pools
+	e.mu.Lock()
 	for name, pool := range e.connPools {
 		pool.Close()
 		logger.Infof("Connection pool closed: %s", name)
@@ -992,6 +1125,27 @@ func getCurrentTime() time.Time {
 	return time.Now()
 }
 
+// snapshotTask 深拷贝一个 Task，用于事件广播与持久化序列化。
+// Task 的 Metadata/Progress/Statistics/Config/Chunks 均为指针或切片，
+// 浅拷贝会让锁外操作与并发写协程共享同一批引用类型，导致 data race。
+// 这里通过 JSON 往返得到完全独立的副本；ProtocolInstance 与 cancelFunc 已标记为 json:"-" 不参与序列化。
+func snapshotTask(t *Task) *Task {
+	if t == nil {
+		return nil
+	}
+	data, err := json.Marshal(t)
+	if err != nil {
+		c := *t
+		return &c
+	}
+	var copy Task
+	if err := json.Unmarshal(data, &copy); err != nil {
+		c := *t
+		return &c
+	}
+	return &copy
+}
+
 // parseDuration parses a duration string to time.Duration
 func parseDuration(durationStr string) time.Duration {
 	duration, err := time.ParseDuration(durationStr)
@@ -1000,4 +1154,91 @@ func parseDuration(durationStr string) time.Duration {
 		return time.Second
 	}
 	return duration
+}
+
+// copyFile copies a file from src to dst, used for cross-device file moves
+func copyFile(src, dst string) error {
+	sourceFile, err := os.Open(src)
+	if err != nil {
+		return fmt.Errorf("failed to open source file: %w", err)
+	}
+	defer sourceFile.Close()
+
+	// Create destination directory if it doesn't exist
+	dstDir := filepath.Dir(dst)
+	if err := os.MkdirAll(dstDir, 0755); err != nil {
+		return fmt.Errorf("failed to create destination directory: %w", err)
+	}
+
+	destFile, err := os.Create(dst)
+	if err != nil {
+		return fmt.Errorf("failed to create destination file: %w", err)
+	}
+	defer destFile.Close()
+
+	// Copy file content
+	if _, err := io.Copy(destFile, sourceFile); err != nil {
+		return fmt.Errorf("failed to copy file content: %w", err)
+	}
+
+	// Sync to ensure all data is written to disk
+	if err := destFile.Sync(); err != nil {
+		return fmt.Errorf("failed to sync destination file: %w", err)
+	}
+
+	return nil
+}
+
+// cleanupTempFilesAfterDownload cleans up temporary files after download completes
+func cleanupTempFilesAfterDownload(savePath, filename string) {
+	if savePath == "" || filename == "" {
+		return
+	}
+
+	logger.Infof("Cleaning up temporary files after download: %s", filename)
+
+	// 清理.part文件
+	partFile := filepath.Join(savePath, filename+".part")
+	if _, err := os.Stat(partFile); err == nil {
+		os.Remove(partFile)
+		logger.Infof("Removed part file after download: %s", partFile)
+	}
+
+	// 清理.parts文件（下载进度/位图文件）
+	partsFile := filepath.Join(savePath, filename+".part.parts")
+	if _, err := os.Stat(partsFile); err == nil {
+		os.Remove(partsFile)
+		logger.Infof("Removed parts file after download: %s", partsFile)
+	}
+
+	// 清理.downloading.json状态文件
+	downloadingStateFile := filepath.Join(savePath, filename+".downloading.json")
+	if _, err := os.Stat(downloadingStateFile); err == nil {
+		os.Remove(downloadingStateFile)
+		logger.Infof("Removed downloading state file after download: %s", downloadingStateFile)
+	}
+
+	// 清理.downloading.json.tmp临时文件
+	downloadingStateTmpFile := downloadingStateFile + ".tmp"
+	if _, err := os.Stat(downloadingStateTmpFile); err == nil {
+		os.Remove(downloadingStateTmpFile)
+		logger.Infof("Removed downloading state tmp file after download: %s", downloadingStateTmpFile)
+	}
+
+	// 清理.torrent文件
+	torrentFile := filepath.Join(savePath, filename+".torrent")
+	if _, err := os.Stat(torrentFile); err == nil {
+		os.Remove(torrentFile)
+		logger.Infof("Removed torrent file after download: %s", torrentFile)
+	}
+
+	// 清理以文件名为名的目录（如果目录为空）
+	fileDir := filepath.Join(savePath, filename)
+	if info, err := os.Stat(fileDir); err == nil && info.IsDir() {
+		files, err := os.ReadDir(fileDir)
+		if err == nil && len(files) == 0 {
+			os.Remove(fileDir)
+			logger.Infof("Removed empty file directory after download: %s", fileDir)
+		}
+	}
 }

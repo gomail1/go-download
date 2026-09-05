@@ -1,4 +1,4 @@
-﻿package handlers
+package handlers
 
 import (
 	"encoding/json"
@@ -165,8 +165,7 @@ type HomeFileItem struct {
 	Size             int64
 	SizeStr          string
 	Downloads        int64
-	Icon             string
-	IconURL          string // 真实图标URL（从可执行文件提取）
+	IconURL          string // 图标URL（/icon 公开接口，覆盖目录与全部文件类型）
 	Ext              string
 	ModTime          string
 	ModTimeTime      time.Time // 修改时间（time.Time格式，用于排序和筛选）
@@ -216,7 +215,6 @@ func getAllFilesInDir(dirPath string) []HomeFileItem {
 				Size:             info.Size(),
 				SizeStr:          utils.FormatFileSize(info.Size()),
 				Downloads:        downloads,
-				Icon:             getFileIcon(file.Name()),
 				Ext:              ext,
 				ModTime:          info.ModTime().Format("2006-01-02 15:04:05"),
 				ModTimeTime:      info.ModTime(),
@@ -268,26 +266,29 @@ func getFileIconClass(ext string) string {
 	}
 }
 
-// 根据文件是否有真实图标URL生成图标HTML
-func getFileIconHTML(f HomeFileItem, iconClass string) string {
-	if f.IconURL != "" {
-		// 有真实图标，使用img标签显示
-		return fmt.Sprintf(`<img src="%s" alt="%s" class="file-icon-real" style="width:100%%;height:100%%;object-fit:contain;">`, 
-			utils.EscapeHTML(f.IconURL), utils.EscapeHTML(f.Name))
-	}
-	// 没有真实图标，使用默认图标
-	return f.Icon
+// inlineTypeIconSVG 内联渲染文件对应的类型图标SVG（无图标URL时的兜底，与 /icon 返回内容一致）
+func inlineTypeIconSVG(f HomeFileItem) string {
+	// 将固定 64px 改为自适应容器尺寸
+	svg := utils.GetFileTypeIconSVG(f.Ext, false)
+	return strings.Replace(svg, `width="64" height="64"`, `width="100%" height="100%"`, 1)
 }
 
-// 根据文件是否有真实图标URL生成浮动卡片图标HTML
-func getFloatCardIconHTML(f HomeFileItem, iconColor string) string {
+// getFileIconHTML 根据文件图标URL生成图标HTML；无URL时内联类型SVG兜底
+func getFileIconHTML(f HomeFileItem) string {
 	if f.IconURL != "" {
-		// 有真实图标，使用img标签显示，白色背景
-		return fmt.Sprintf(`<img src="%s" alt="%s" style="width:100%%;height:100%%;object-fit:contain;background:white;border-radius:8px;">`, 
+		return fmt.Sprintf(`<img src="%s" alt="%s" class="file-icon-real" style="width:100%%;height:100%%;object-fit:contain;">`,
 			utils.EscapeHTML(f.IconURL), utils.EscapeHTML(f.Name))
 	}
-	// 没有真实图标，使用默认图标和背景色
-	return f.Icon
+	return inlineTypeIconSVG(f)
+}
+
+// getFloatCardIconHTML 根据文件图标URL生成浮动卡片图标HTML；无URL时内联类型SVG兜底
+func getFloatCardIconHTML(f HomeFileItem) string {
+	if f.IconURL != "" {
+		return fmt.Sprintf(`<img src="%s" alt="%s" style="width:100%%;height:100%%;object-fit:contain;background:white;border-radius:8px;">`,
+			utils.EscapeHTML(f.IconURL), utils.EscapeHTML(f.Name))
+	}
+	return inlineTypeIconSVG(f)
 }
 
 // 主页处理函数 - 展示型首页
@@ -317,13 +318,11 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 	// 读取所有文件
 	allFiles := getAllFilesInDir(config.AppConfig.Server.DownloadDir)
 
-	// 为可执行文件生成真实图标URL
+	// 为所有文件生成图标URL（可执行文件出真实图标，其余按类型出SVG图标，统一走/icon）
 	baseURL := fmt.Sprintf("%s://%s", utils.GetRequestScheme(r), r.Host)
 	for i := range allFiles {
-		if utils.IsExecutableFile(allFiles[i].Ext) {
-			// 使用EncodePath对路径进行URL编码，确保包含空格、中文、特殊字符的路径能正常工作
-			allFiles[i].IconURL = fmt.Sprintf("%s/icon?path=%s", baseURL, utils.EncodePath(allFiles[i].Path))
-		}
+		// 使用EncodePath对路径进行URL编码，确保包含空格、中文、特殊字符的路径能正常工作
+		allFiles[i].IconURL = fmt.Sprintf("%s/icon?path=%s", baseURL, utils.EncodePath(allFiles[i].Path))
 	}
 
 	// 筛选文件
@@ -423,7 +422,7 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 						<div class="float-card-name">%s</div>
 						<div class="float-card-meta">%s · %d 下载</div>
 					</div>
-				</div>`, cardClass, floatRealIconClass, floatIconStyle, getFloatCardIconHTML(f, iconColor), utils.EscapeHTML(f.Name), f.SizeStr, f.Downloads)
+				</div>`, cardClass, floatRealIconClass, floatIconStyle, getFloatCardIconHTML(f), utils.EscapeHTML(f.Name), f.SizeStr, f.Downloads)
 		}
 	}
 
@@ -503,7 +502,7 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 					</div>
 				</div>
 				<a href="%s" class="file-card-btn">下载</a>
-			</div>`, iconClass, hotRealIconClass, getFileIconHTML(f, iconClass), rankBadge, utils.EscapeHTML(f.Name), f.SizeStr, f.Downloads, downloadURL)
+			</div>`, iconClass, hotRealIconClass, getFileIconHTML(f), rankBadge, utils.EscapeHTML(f.Name), f.SizeStr, f.Downloads, downloadURL)
 		}
 		hotFilesHTML += `</div>`
 	}
@@ -540,7 +539,7 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 					</div>
 				</div>
 				<a href="%s" class="file-card-btn">下载</a>
-			</div>`, iconClass, latestRealIconClass, getFileIconHTML(f, iconClass), utils.EscapeHTML(f.Name), f.SizeStr, f.ModTime, downloadURL)
+			</div>`, iconClass, latestRealIconClass, getFileIconHTML(f), utils.EscapeHTML(f.Name), f.SizeStr, f.ModTime, downloadURL)
 		}
 		latestFilesHTML += `</div>`
 	}
@@ -590,13 +589,13 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 		if category != "" {
 			sortBaseURL += "category=" + url.QueryEscape(category) + "&"
 		}
-		
+
 		// 当前排序方式
 		currentSort := "downloads"
 		if sortQuery == "latest" {
 			currentSort = "latest"
 		}
-		
+
 		// 排序按钮
 		downloadsActive := ""
 		latestActive := ""
@@ -605,7 +604,7 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 		} else {
 			latestActive = "sort-btn-active"
 		}
-		
+
 		sortBarHTML = fmt.Sprintf(`<div class="sort-bar">
 			<span class="sort-bar-label">排序：</span>
 			<a href="%ssort=downloads" class="sort-btn %s">🔥 热门下载</a>
@@ -662,7 +661,7 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 						<a href="%s" class="file-card-btn">下载</a>
 					</div>
 				</div>
-			</div>`, iconClass, realIconClass, getFileIconHTML(f, iconClass), safeFileName, f.SizeStr, safeCategoryName, f.Downloads, safeFilePath, safeFileName, downloadURL)
+			</div>`, iconClass, realIconClass, getFileIconHTML(f), safeFileName, f.SizeStr, safeCategoryName, f.Downloads, safeFilePath, safeFileName, downloadURL)
 		}
 	}
 
@@ -777,7 +776,7 @@ func IndexHandler(w http.ResponseWriter, r *http.Request) {
 		} else if searchQuery != "" {
 			link = "/?search=" + url.QueryEscape(searchQuery)
 		}
-		categoryTabsHTML += fmt.Sprintf(`<a href="%s" class="category-tab %s">%s %s</a>`, link, active, utils.EscapeHTML(cat.Icon), utils.EscapeHTML(cat.Name))
+		categoryTabsHTML += fmt.Sprintf(`<a href="%s" class="category-tab %s">%s%s</a>`, link, active, utils.GetCategoryIconSVG(cat.Icon, 17), utils.EscapeHTML(cat.Name))
 	}
 
 	// 搜索结果标题和分类标签显示控制
@@ -1051,13 +1050,11 @@ func generateSearchResults(r *http.Request, results []SearchResult, basePath str
 				relPath = result.Path
 			}
 
-			// 生成文件图标
+			// 生成文件图标：目录/文件统一走/icon（目录为文件夹SVG，文件按类型），result.Path为绝对路径可被安全校验
 			var icon string
-			if result.IsDir {
-				icon = "📁"
-			} else {
-				icon = getFileIcon(result.Name)
-			}
+			iconURL := fmt.Sprintf("/icon?path=%s", utils.EncodePath(result.Path))
+			icon = fmt.Sprintf(`<img src="%s" alt="%s" style="width:40px;height:40px;object-fit:contain;">`,
+				utils.EscapeHTML(iconURL), utils.EscapeHTML(result.Name))
 
 			// 生成文件元信息
 			var meta string
@@ -1624,25 +1621,25 @@ func FilesHandler(w http.ResponseWriter, r *http.Request) {
 					<input type="text" name="search" placeholder="搜索文件或目录..." value="` + utils.EscapeHTML(searchQuery) + `" style="flex: 1;">
 					<button type="submit">搜索</button>
 				</form>
-				<button onclick="openCategoryManager()" style="padding: 10px 20px; background: var(--v2-primary); color: white; border: none; border-radius: 10px; font-size: 14px; font-weight: 500; cursor: pointer; white-space: nowrap;">📁 分类管理</button>
+				<button onclick="openCategoryManager()" style="display:inline-flex;align-items:center;gap:6px;padding:10px 20px;background:var(--v2-primary);color:white;border:none;border-radius:10px;font-size:14px;font-weight:500;cursor:pointer;white-space:nowrap;">` + utils.GetCategoryIconSVG("folder", 16) + ` 分类管理</button>
 			</div>
 
 			<!-- 路径导航 -->
 			<nav class="breadcrumb-v2" aria-label="面包屑导航">
 				` + func() string {
-					if path == "." || path == "./" {
-						// 当前在根目录，高亮显示
-						return `<span class="breadcrumb-current breadcrumb-home-active">
+		if path == "." || path == "./" {
+			// 当前在根目录，高亮显示
+			return `<span class="breadcrumb-current breadcrumb-home-active">
 							<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
 							根目录
 						</span>`
-					}
-					// 不在根目录，可点击返回根目录
-					return `<a href="/files?path=./" class="breadcrumb-home" title="根目录">
+		}
+		// 不在根目录，可点击返回根目录
+		return `<a href="/files?path=./" class="breadcrumb-home" title="根目录">
 						<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"></path><polyline points="9 22 9 12 15 12 15 22"></polyline></svg>
 						根目录
 					</a>`
-				}() + `
+	}() + `
 				` + utils.GeneratePathNavigation(path) + `
 			</nav>
 
@@ -1665,18 +1662,31 @@ func FilesHandler(w http.ResponseWriter, r *http.Request) {
 					<button onclick="closeCategoryManager()" style="background: none; border: none; font-size: 20px; cursor: pointer; color: #666;">&times;</button>
 				</div>
 				<div style="margin-bottom: 16px;">
-					<input type="text" id="newCategoryName" placeholder="分类名称" style="width: 60%; padding: 8px 12px; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 14px; margin-right: 8px;">
-					<input type="text" id="newCategoryIcon" placeholder="图标" style="width: 20%; padding: 8px 12px; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 14px; margin-right: 8px;">
-					<button onclick="addCategory()" style="padding: 8px 16px; background: #4f46e5; color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer;">添加</button>
+					<input type="text" id="newCategoryName" placeholder="分类名称" style="width: 55%; padding: 8px 12px; border: 1px solid #e5e7eb; border-radius: 8px; font-size: 14px; margin-right: 8px;">
+					<span id="newCategoryIcon" onclick="openIconPicker('new')" title="选择图标" style="display:inline-flex;align-items:center;justify-content:center;width:40px;height:40px;border:1px solid #e5e7eb;border-radius:8px;cursor:pointer;margin-right:8px;background:#fff;vertical-align:middle;"></span>
+					<button onclick="addCategory()" style="padding: 8px 16px; background: #4f46e5; color: white; border: none; border-radius: 8px; font-size: 14px; cursor: pointer; vertical-align: middle;">添加</button>
 				</div>
 				<div id="categoryList" style="border-top: 1px solid #e5e7eb; padding-top: 16px;">
+				</div>
+				<div id="catIconPicker" style="display: none; margin-top: 16px; padding-top: 14px; border-top: 1px solid #e5e7eb;">
+					<div style="font-size: 13px; color: #6B7280; margin-bottom: 10px;">选择图标（与文件卡片图标同源）</div>
+					<div id="catIconGrid" style="display: grid; grid-template-columns: repeat(8, 1fr); gap: 6px;"></div>
+					<div style="display: flex; gap: 8px; margin-top: 12px;">
+						<button onclick="confirmIconPick()" style="padding: 6px 16px; background: #4f46e5; color: white; border: none; border-radius: 8px; font-size: 13px; cursor: pointer;">确定</button>
+						<button onclick="hideIconPicker()" style="padding: 6px 16px; background: #f3f4f6; border: none; border-radius: 8px; font-size: 13px; cursor: pointer;">取消</button>
+					</div>
 				</div>
 			</div>
 		</div>
 
+		` + utils.CategoryIconSpriteHTML() + `
 		<script>
+		var CAT_ICON_META = ` + utils.CategoryIconMetaJSON() + `;
 		function openCategoryManager() {
 			document.getElementById('categoryModal').style.display = 'flex';
+			if (!window.__newIconKey) { window.__newIconKey = 'folder'; }
+			document.getElementById('newCategoryIcon').innerHTML = catIcon(window.__newIconKey, 22);
+			hideIconPicker();
 			loadCategories();
 		}
 		function closeCategoryManager() {
@@ -1691,7 +1701,7 @@ func FilesHandler(w http.ResponseWriter, r *http.Request) {
 						const item = document.createElement('div');
 						item.id = 'cat-item-' + cat.id;
 						item.style.cssText = 'display: flex; align-items: center; padding: 10px 0; border-bottom: 1px solid #f3f4f6;';
-						item.innerHTML = '<span id="cat-icon-' + cat.id + '" style="font-size: 18px; margin-right: 10px; width: 24px; text-align: center;">' + cat.icon + '</span><span id="cat-name-' + cat.id + '" style="flex: 1; font-size: 14px;">' + cat.name + '</span><div id="cat-actions-' + cat.id + '"><button onclick="startEditCategory(\'' + cat.id + '\', \'' + cat.name + '\', \'' + cat.icon + '\')" style="margin-right: 8px; padding: 4px 10px; background: #f3f4f6; border: none; border-radius: 6px; font-size: 12px; cursor: pointer;">编辑</button>' + (cat.id !== 'default' ? '<button onclick="deleteCategory(\'' + cat.id + '\')" style="padding: 4px 10px; background: #fee2e2; color: #dc2626; border: none; border-radius: 6px; font-size: 12px; cursor: pointer;">删除</button>' : '') + '</div>';
+						item.innerHTML = '<span id="cat-icon-' + cat.id + '" style="display:inline-flex;align-items:center;justify-content:center;margin-right:10px;width:24px;">' + catIcon(cat.icon, 18) + '</span><span id="cat-name-' + cat.id + '" style="flex: 1; font-size: 14px;">' + cat.name + '</span><div id="cat-actions-' + cat.id + '"><button onclick="startEditCategory(\'' + cat.id + '\', \'' + cat.name + '\', \'' + cat.icon + '\')" style="margin-right: 8px; padding: 4px 10px; background: #f3f4f6; border: none; border-radius: 6px; font-size: 12px; cursor: pointer;">编辑</button>' + (cat.id !== 'default' ? '<button onclick="deleteCategory(\'' + cat.id + '\')" style="padding: 4px 10px; background: #fee2e2; color: #dc2626; border: none; border-radius: 6px; font-size: 12px; cursor: pointer;">删除</button>' : '') + '</div>';
 						list.appendChild(item);
 					});
 				}
@@ -1704,13 +1714,14 @@ func FilesHandler(w http.ResponseWriter, r *http.Request) {
 			const actionsEl = document.getElementById('cat-actions-' + id);
 			
 			nameEl.innerHTML = '<input type="text" id="edit-name-' + id + '" value="' + name + '" style="width: 120px; padding: 4px 8px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px;">';
-			iconEl.innerHTML = '<input type="text" id="edit-icon-' + id + '" value="' + icon + '" style="width: 40px; padding: 4px; border: 1px solid #d1d5db; border-radius: 6px; font-size: 14px; text-align: center;">';
+			editIconState[id] = icon;
+			iconEl.innerHTML = '<button type="button" onclick="openIconPicker(\'' + id + '\')" title="点击更换图标" style="display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:1px solid #d1d5db;background:#fff;border-radius:8px;cursor:pointer;vertical-align:middle;">' + catIcon(icon, 20) + '</button>';
 			actionsEl.innerHTML = '<button onclick="saveEditCategory(\'' + id + '\')" style="margin-right: 8px; padding: 4px 10px; background: #4f46e5; color: white; border: none; border-radius: 6px; font-size: 12px; cursor: pointer;">保存</button><button onclick="loadCategories()" style="padding: 4px 10px; background: #f3f4f6; border: none; border-radius: 6px; font-size: 12px; cursor: pointer;">取消</button>';
 		}
 
 		function saveEditCategory(id) {
 			const newName = document.getElementById('edit-name-' + id).value.trim();
-			const newIcon = document.getElementById('edit-icon-' + id).value.trim() || '📁';
+			const newIcon = editIconState[id] || 'folder';
 			if (!newName) { alert('分类名称不能为空'); return; }
 			
 			fetch('/api/categories/' + id, {
@@ -1727,10 +1738,10 @@ func FilesHandler(w http.ResponseWriter, r *http.Request) {
 		}
 		function addCategory() {
 			const name = document.getElementById('newCategoryName').value.trim();
-			const icon = document.getElementById('newCategoryIcon').value.trim() || '📁';
+			const icon = window.__newIconKey || 'folder';
 			if (!name) { alert('请输入分类名称'); return; }
 			fetch('/api/categories', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name, icon }) }).then(res => res.json()).then(data => {
-				if (data.success) { document.getElementById('newCategoryName').value = ''; document.getElementById('newCategoryIcon').value = ''; loadCategories(); }
+				if (data.success) { document.getElementById('newCategoryName').value = ''; window.__newIconKey = 'folder'; document.getElementById('newCategoryIcon').innerHTML = catIcon('folder', 22); hideIconPicker(); loadCategories(); }
 				else { alert(data.message || '添加失败'); }
 			});
 		}
@@ -1741,117 +1752,52 @@ func FilesHandler(w http.ResponseWriter, r *http.Request) {
 				if (data.success) { loadCategories(); } else { alert(data.message || '删除失败'); }
 			});
 		}
+
+		var editIconState = {};
+		var __pickTarget = 'new';
+		var __pendingIcon = 'folder';
+		function catIcon(k, sz) {
+			var ok = false;
+			for (var i = 0; i < CAT_ICON_META.length; i++) { if (CAT_ICON_META[i].key === k) { ok = true; break; } }
+			if (!ok) k = 'folder';
+			return '<svg viewBox="0 0 24 24" style="width:' + (sz || 18) + 'px;height:' + (sz || 18) + 'px;flex:none"><use href="#ct_' + k + '"/></svg>';
+		}
+		function renderIconGrid() {
+			var h = '';
+			for (var i = 0; i < CAT_ICON_META.length; i++) {
+				var m = CAT_ICON_META[i];
+				var sel = (m.key === __pendingIcon);
+				h += '<div onclick="pickIcon(\'' + m.key + '\')" title="' + m.label + '" style="display:flex;align-items:center;justify-content:center;height:38px;border:2px solid ' + (sel ? '#4f46e5' : '#e5e7eb') + ';border-radius:8px;cursor:pointer;background:' + (sel ? '#eef2ff' : '#fff') + ';">' + catIcon(m.key, 22) + '</div>';
+			}
+			document.getElementById('catIconGrid').innerHTML = h;
+		}
+		function pickIcon(k) { __pendingIcon = k; renderIconGrid(); }
+		function openIconPicker(target) {
+			__pickTarget = target;
+			__pendingIcon = (target === 'new') ? (window.__newIconKey || 'folder') : (editIconState[target] || 'folder');
+			renderIconGrid();
+			document.getElementById('catIconPicker').style.display = 'block';
+		}
+		function confirmIconPick() {
+			var k = __pendingIcon;
+			if (__pickTarget === 'new') {
+				window.__newIconKey = k;
+				document.getElementById('newCategoryIcon').innerHTML = catIcon(k, 22);
+			} else {
+				editIconState[__pickTarget] = k;
+				var ie = document.getElementById('cat-icon-' + __pickTarget);
+				if (ie) {
+					ie.innerHTML = '<button type="button" onclick="openIconPicker(\'' + __pickTarget + '\')" title="点击更换图标" style="display:inline-flex;align-items:center;justify-content:center;width:34px;height:34px;border:1px solid #d1d5db;background:#fff;border-radius:8px;cursor:pointer;vertical-align:middle;">' + catIcon(k, 20) + '</button>';
+				}
+			}
+			hideIconPicker();
+		}
+		function hideIconPicker() { document.getElementById('catIconPicker').style.display = 'none'; }
 		</script>
 	</body>
 </html>`
 
 	w.Write([]byte(html))
-}
-
-// 根据文件扩展名获取图标
-func getFileIcon(fileName string) string {
-	// 定义文件类型图标映射
-	// 使用简单、兼容性好的emoji
-	iconMap := map[string]string{
-		// 视频文件
-		".mp4":  "🎬",
-		".avi":  "🎬",
-		".mkv":  "🎬",
-		".mov":  "🎬",
-		".wmv":  "🎬",
-		".flv":  "🎬",
-		".webm": "🎬",
-		".mpeg": "🎬",
-		".mpg":  "🎬",
-		".rm":   "🎬",
-		".rmvb": "🎬",
-		// 音频文件
-		".mp3":  "🎵",
-		".wav":  "🎵",
-		".flac": "🎵",
-		".aac":  "🎵",
-		".ogg":  "🎵",
-		".wma":  "🎵",
-		".m4a":  "🎵",
-		// 图片文件
-		".jpg":  "🖼️",
-		".jpeg": "🖼️",
-		".png":  "🖼️",
-		".gif":  "🖼️",
-		".bmp":  "🖼️",
-		".svg":  "🖼️",
-		".webp": "🖼️",
-		".ico":  "🖼️",
-		// 文档文件
-		".pdf":  "📄",
-		".doc":  "📄",
-		".docx": "📄",
-		".txt":  "📄",
-		".rtf":  "📄",
-		".md":   "📄",
-		".html": "📄",
-		".htm":  "📄",
-		".csv":  "📄",
-		".xls":  "📄",
-		".xlsx": "📄",
-		".ppt":  "📄",
-		".pptx": "📄",
-		// 压缩文件
-		".zip": "📦",
-		".rar": "📦",
-		".7z":  "📦",
-		".tar": "📦",
-		".gz":  "📦",
-		".bz2": "📦",
-		".xz":  "📦",
-		".tgz": "📦",
-		// 种子文件
-		".torrent": "🧲",
-		// 可执行文件
-		".exe": "⚙️",
-		".app": "⚙️",
-		".sh":  "⚙️",
-		".bat": "⚙️",
-		".cmd": "⚙️",
-		".jar": "⚙️",
-		".apk": "🤖",
-		// 编程语言
-		".py":    "❓",
-		".go":    "❓",
-		".js":    "❓",
-		".ts":    "❓",
-		".java":  "❓",
-		".c":     "❓",
-		".cpp":   "❓",
-		".h":     "❓",
-		".hpp":   "❓",
-		".php":   "❓",
-		".rb":    "❓",
-		".swift": "❓",
-		".kt":    "❓",
-		// 磁盘镜像
-		".iso": "💿",
-		".img": "💿",
-		".dmg": "💿",
-		// 配置文件
-		".json": "⚙️",
-		".yaml": "⚙️",
-		".yml":  "⚙️",
-		".xml":  "⚙️",
-		".cfg":  "⚙️",
-		".conf": "⚙️",
-	}
-
-	// 获取文件扩展名并转换为小写
-	ext := strings.ToLower(filepath.Ext(fileName))
-
-	// 查找对应的图标，如果没有找到则返回默认图标
-	if icon, ok := iconMap[ext]; ok {
-		return icon
-	}
-
-	// 默认文件图标
-	return "📄"
 }
 
 // 辅助函数：生成文件列表
@@ -2404,8 +2350,11 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 					alert('创建目录失败: 网络错误');
 				};
 
-				// 发送请求
-				xhr.send('parent_dir=' + encodeURIComponent(currentPath) + '&dir_name=' + encodeURIComponent(dirName));
+				// 发送请求（同时通过请求头和表单字段传递CSRF令牌，防止反向代理过滤请求头）
+				const formData = 'parent_dir=' + encodeURIComponent(currentPath) + 
+					'&dir_name=' + encodeURIComponent(dirName) +
+					'&csrf_token=' + encodeURIComponent(csrfToken);
+				xhr.send(formData);
 			});
 
 			// 取消创建目录
@@ -2605,15 +2554,16 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 		if parentPath == "." {
 			parentPath = ""
 		}
-		fileList += fmt.Sprintf(`<div class="file-item">
+		// 返回上一级目录行：data-dir 供排序等 JS 判定目录；图标内联同源文件夹 SVG（/icon 无法表示上级/根路径，直接内联不依赖网络请求）
+		fileList += fmt.Sprintf(`<div class="file-item" data-dir="1">
 					<div class="file-item-content">
-						<div class="file-icon">📁</div>
+						<div class="file-icon">%s</div>
 						<div class="file-info">
 							<div class="file-name"><a href="/files?path=%s">..</a></div>
 							<div class="file-meta">返回上一级</div>
 						</div>
 					</div>
-				</div>`, url.QueryEscape(parentPath))
+				</div>`, utils.GetCategoryIconSVG("folder", 40), url.QueryEscape(parentPath))
 	}
 
 	// 添加文件和目录
@@ -2628,23 +2578,11 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 			continue
 		}
 
-		// 生成文件图标
+		// 生成文件图标：目录显示文件夹图标，文件按类型显示对应图标（统一走/icon，img可显示PNG与SVG）
 		var icon string
-		if file.IsDir() {
-			icon = "📁"
-		} else {
-			// 对于可执行文件，使用/icon?path=方式获取真实图标
-			// 注意：不能直接访问图标缓存文件，因为config/icons/cache目录没有被映射为静态资源
-			ext := strings.ToLower(filepath.Ext(name))
-			if utils.IsExecutableFile(ext) {
-				// 使用和前端首页一致的图标URL方式
-				iconURL := fmt.Sprintf("/icon?path=%s", fileURL)
-				icon = fmt.Sprintf(`<img src="%s" alt="%s" style="width:40px;height:40px;object-fit:contain;">`, 
-					utils.EscapeHTML(iconURL), utils.EscapeHTML(name))
-			} else {
-				icon = getFileIcon(name)
-			}
-		}
+		iconURL := fmt.Sprintf("/icon?path=%s", fileURL)
+		icon = fmt.Sprintf(`<img src="%s" alt="%s" style="width:40px;height:40px;object-fit:contain;">`,
+			utils.EscapeHTML(iconURL), utils.EscapeHTML(name))
 
 		// 生成文件元信息
 		var meta string
@@ -2669,7 +2607,7 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 			categoryID := cm.GetFileCategory(normalizedPath)
 			if categoryID != "" && categoryID != "default" {
 				if category, err := cm.GetCategoryByID(categoryID); err == nil {
-					categoryInfo = fmt.Sprintf(" • <span style=\"color: #7C3AED;\">%s %s</span>", category.Icon, category.Name)
+					categoryInfo = fmt.Sprintf(" • <span style=\"display:inline-flex;align-items:center;gap:4px;color:#7C3AED;\">%s<span style=\"font-weight:500;\">%s</span></span>", utils.GetCategoryIconSVG(category.Icon, 15), utils.EscapeHTML(category.Name))
 				}
 			}
 		}
@@ -2697,7 +2635,7 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 		// 生成列表视图文件项
 		var item string
 		if file.IsDir() {
-			item = fmt.Sprintf(`<div class="file-item">
+			item = fmt.Sprintf(`<div class="file-item" data-dir="1">
 						<div class="file-item-content">
 							%s
 							<div class="file-icon">%s</div>
@@ -2723,7 +2661,7 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 
 			// 添加分类信息
 			meta += categoryInfo
-			
+
 			// 添加下载统计信息
 			meta += downloadStats
 
@@ -2798,8 +2736,10 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 						continue
 					}
 
-					// 生成文件图标
-					icon := "📄"
+					// 生成文件图标：待审核文件走 /icon（相对当前浏览路径），与列表其它文件图标一致；路径无法解析时 /icon 返回默认矢量图标
+					pendingIconPath := filepath.Join(currentPath, filename)
+					icon := fmt.Sprintf(`<img src="/icon?path=%s" alt="%s" style="width:40px;height:40px;object-fit:contain;">`,
+						utils.EncodePath(pendingIconPath), filename)
 
 					// 生成文件元信息
 					meta := fmt.Sprintf("文件 • %s • %s", utils.FormatFileSize(fileInfo.Size()), fileInfo.ModTime().Format("2006-01-02 15:04:05"))
@@ -2939,11 +2879,12 @@ func generateFileList(r *http.Request, files []os.DirEntry, currentPath string) 
 					}
 					
 					const fileName = item.querySelector('.file-name').textContent.trim();
-					const isDir = item.querySelector('.file-icon').textContent === '📁';
+					// 目录判定读 data-dir（列表项图标已 SVG/img 化，无法再以 emoji 文本判定）
+					const isDir = item.getAttribute('data-dir') === '1';
 					const fileType = isDir ? '目录' : '文件';
 					
 					sortItemsHTML += '<div style="display: flex; align-items: center; gap: 10px; margin-bottom: 10px; padding: 10px; background: #f9f9f9; border-radius: 4px;">' +
-							'<span style="font-size: 20px;">' + (isDir ? '📁' : '📄') + '</span>' +
+							'<span style="display: inline-flex; align-items: center; justify-content: center; width: 22px;">' + catIcon(isDir ? 'folder' : 'file', 20) + '</span>' +
 							'<input type="number" min="1" value="' + (index + 1) + '" style="width: 60px; padding: 6px; border: 1px solid #ddd; border-radius: 4px; text-align: center;">' +
 							'<div style="flex: 1;">' +
 								'<div style="font-weight: bold;">' + fileName + '</div>' +

@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -362,5 +363,62 @@ func TestTruncateString(t *testing.T) {
 				t.Errorf("TruncateString(%q, %d) = %q, want %q", tt.input, tt.maxLen, result, tt.want)
 			}
 		})
+	}
+}
+
+// TestNormalizeIP 校验 IP 标准化：非法值（伪造 XFF/任意字符串）必须被拒绝，返回空串
+func TestNormalizeIP(t *testing.T) {
+	tests := []struct {
+		name string
+		in   string
+		want string
+	}{
+		{"正常IPv4", "192.168.1.100", "192.168.1.100"},
+		{"正常IPv6", "2001:db8::1", "2001:db8::1"},
+		{"带方括号IPv6", "[2001:db8::1]", "2001:db8::1"},
+		{"IPv6回环映射", "::1", "127.0.0.1"},
+		{"方括号回环映射", "[::1]", "127.0.0.1"},
+		{"HTML注入字符串", "<script>alert(1)</script>", ""},
+		{"路径遍历串", "../../etc/passwd", ""},
+		{"域名", "evil.example.com", ""},
+		{"带端口", "1.2.3.4:8080", ""},
+		{"空串", "", ""},
+		{"空白", "   ", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := normalizeIP(tt.in); got != tt.want {
+				t.Errorf("normalizeIP(%q) = %q, want %q", tt.in, got, tt.want)
+			}
+		})
+	}
+}
+
+// TestGetClientIPRejectsSpoofedXFF 伪造 XFF 校验：
+// 1) 合法的 XFF 仍被信任（反向代理场景不回归）
+// 2) 非法的 XFF 不得入库，回退到 RemoteAddr（客户端直连无法冒用任意 IP）
+func TestGetClientIPRejectsSpoofedXFF(t *testing.T) {
+	// 合法 XFF 正常返回
+	req := httptest.NewRequest("GET", "/", nil)
+	req.Header.Set("X-Forwarded-For", "203.0.113.7, 10.0.0.1")
+	req.RemoteAddr = "10.0.0.2:5555"
+	if got := GetClientIP(req); got != "203.0.113.7" {
+		t.Errorf("合法 XFF 应被信任, got %q", got)
+	}
+
+	// 伪造 XFF 必须回退到 RemoteAddr，不能把任意字符串写进统计
+	req2 := httptest.NewRequest("GET", "/", nil)
+	req2.Header.Set("X-Forwarded-For", `<script>alert(1)</script>`)
+	req2.RemoteAddr = "10.0.0.2:5555"
+	if got := GetClientIP(req2); got != "10.0.0.2" {
+		t.Errorf("非法 XFF 应回退 RemoteAddr, got %q", got)
+	}
+
+	// X-Real-IP 同样校验
+	req3 := httptest.NewRequest("GET", "/", nil)
+	req3.Header.Set("X-Real-IP", "not-an-ip")
+	req3.RemoteAddr = "[2001:db8::5]:443"
+	if got := GetClientIP(req3); got != "2001:db8::5" {
+		t.Errorf("非法 X-Real-IP 应回退 RemoteAddr, got %q", got)
 	}
 }

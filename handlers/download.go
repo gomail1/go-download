@@ -174,27 +174,31 @@ func DownloadHandler(w http.ResponseWriter, r *http.Request) {
 
 	// 获取实际传输的字节数
 	actualBytes := cw.written
-	
+
 	// 对于206 Partial Content（Range请求），只记录实际传输的字节数
 	// 对于200 OK（完整下载），actualBytes应该等于文件大小
 	// 如果actualBytes为0（可能是HEAD请求或错误），不记录统计
 	if actualBytes > 0 {
-		// 同步更新下载统计，确保数据被正确记录
 		// 从请求中获取IP地址
 		logIP := utils.GetClientIP(r)
 
-		// 增加下载次数，使用实际传输的字节数而不是文件完整大小
-		// 这样多线程下载的总流量就是各部分实际传输字节数之和，
-		// 而不是文件大小×线程数
-		IncrementDownloadCount(path, logIP, actualBytes)
+		// 增加下载统计：多线程/断点续传的分片请求会在 60s 合并窗口内并入同一次逻辑下载，
+		// 仅窗口内首次传输使下载次数 +1（流量仍按每片实际字节累加），
+		// 避免「一次下载被计 N 次」；带宽与热力点保留每片传输明细
+		isNew := IncrementDownloadCount(path, logIP, actualBytes)
 
-		// 记录IP下载统计
-		RecordIPDownload(logIP, actualBytes)
+		// 记录IP下载统计（isNew 同步控制次数，避免分片虚高按次限额）
+		RecordIPDownload(logIP, actualBytes, isNew)
 
-		// 立即保存统计数据，确保数据被持久化
-		SaveStatsData()
+		// 仅在新一轮逻辑下载时立即持久化并记录操作日志：
+		// 同一逻辑下载的后续分片由后台 5 分钟周期保存兜底，
+		// 避免每传输一块就全量写盘一次、刷屏一条审计日志
+		if isNew {
+			// 同步更新下载统计，确保数据被正确记录
+			SaveStatsData()
 
-		// 记录用户下载操作日志
-		utils.LogUserAction(r, "download_file", fmt.Sprintf("下载文件: %s, 实际传输: %d字节", path, actualBytes))
+			// 记录用户下载操作日志
+			utils.LogUserAction(r, "download_file", fmt.Sprintf("下载文件: %s, 实际传输: %d字节", path, actualBytes))
+		}
 	}
 }

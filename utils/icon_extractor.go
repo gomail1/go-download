@@ -16,7 +16,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/disintegration/imaging"
+	"github.com/vtemlabs/imaging" // 替代已停维护的 github.com/disintegration/imaging，修复 CVE-2023-36308（craft TIFF 导致 scanner.go panic）
 )
 
 // 资源目录结构

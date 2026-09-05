@@ -9,6 +9,9 @@
  * 覆盖 fetch 与 XMLHttpRequest 两种调用方式。
  *
  * 这样业务 JS 无需逐处改动即可获得 CSRF 防护。
+ *
+ * 防重复机制：如果业务代码已经手动设置了 X-CSRF-Token，
+ * 本脚本不会重复设置，避免 token 格式错误。
  */
 (function () {
     'use strict';
@@ -69,21 +72,36 @@
     if (typeof XMLHttpRequest !== 'undefined') {
         var originalOpen = XMLHttpRequest.prototype.open;
         var originalSend = XMLHttpRequest.prototype.send;
+        var originalSetRequestHeader = XMLHttpRequest.prototype.setRequestHeader;
 
         XMLHttpRequest.prototype.open = function (method, url) {
             try {
                 this.__csrfMethod = method;
                 this.__csrfUrl = url;
+                this.__csrfTokenSet = false; // 重置标记
             } catch (e) { /* 忽略 */ }
             return originalOpen.apply(this, arguments);
+        };
+
+        // patch setRequestHeader，记录是否已经设置了CSRF token
+        XMLHttpRequest.prototype.setRequestHeader = function (header, value) {
+            try {
+                if (header && header.toLowerCase() === 'x-csrf-token') {
+                    this.__csrfTokenSet = true;
+                }
+            } catch (e) { /* 忽略 */ }
+            return originalSetRequestHeader.apply(this, arguments);
         };
 
         XMLHttpRequest.prototype.send = function () {
             try {
                 if (needsToken(this.__csrfMethod, this.__csrfUrl)) {
-                    var token = getToken();
-                    if (token) {
-                        this.setRequestHeader('X-CSRF-Token', token);
+                    // 只有在业务代码没有手动设置时才自动添加，避免重复设置导致token格式错误
+                    if (!this.__csrfTokenSet) {
+                        var token = getToken();
+                        if (token) {
+                            this.setRequestHeader('X-CSRF-Token', token);
+                        }
                     }
                 }
             } catch (e) { /* 忽略 */ }

@@ -1,18 +1,23 @@
 package utils
 
 import (
+	"context"
 	"fmt"
+	"net"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
+	"unicode/utf8"
 )
 
 // SafePath 安全路径验证结果
 type SafePath struct {
-	FullPath    string // 完整绝对路径
+	FullPath     string // 完整绝对路径
 	RelativePath string // 相对于基础目录的相对路径
-	IsSafe      bool   // 是否安全
-	Error       error  // 错误信息
+	IsSafe       bool   // 是否安全
+	Error        error  // 错误信息
 }
 
 // ValidateSafePath 验证路径是否安全，防止路径遍历攻击
@@ -67,25 +72,25 @@ func ValidateSafePath(baseDir, userPath string) *SafePath {
 	// 7. 检查是否为符号链接（可选，根据需要启用）
 	// 注意：这可能会影响正常的符号链接使用，默认不启用
 	/*
-	fileInfo, err := os.Lstat(absFullPath)
-	if err == nil && fileInfo.Mode()&os.ModeSymlink != 0 {
-		// 读取符号链接的目标
-		target, err := os.Readlink(absFullPath)
-		if err == nil {
-			// 验证符号链接目标是否也在基础目录内
-			if !filepath.IsAbs(target) {
-				target = filepath.Join(filepath.Dir(absFullPath), target)
-			}
-			absTarget, err := filepath.Abs(target)
+		fileInfo, err := os.Lstat(absFullPath)
+		if err == nil && fileInfo.Mode()&os.ModeSymlink != 0 {
+			// 读取符号链接的目标
+			target, err := os.Readlink(absFullPath)
 			if err == nil {
-				relTarget, err := filepath.Rel(absBaseDir, absTarget)
-				if err != nil || strings.HasPrefix(relTarget, "..") {
-					result.Error = fmt.Errorf("符号链接目标不在允许的目录内")
-					return result
+				// 验证符号链接目标是否也在基础目录内
+				if !filepath.IsAbs(target) {
+					target = filepath.Join(filepath.Dir(absFullPath), target)
+				}
+				absTarget, err := filepath.Abs(target)
+				if err == nil {
+					relTarget, err := filepath.Rel(absBaseDir, absTarget)
+					if err != nil || strings.HasPrefix(relTarget, "..") {
+						result.Error = fmt.Errorf("符号链接目标不在允许的目录内")
+						return result
+					}
 				}
 			}
 		}
-	}
 	*/
 
 	// 8. 路径验证通过
@@ -226,4 +231,209 @@ func GetDirectorySize(path string) (int64, error) {
 	})
 
 	return size, err
+}
+
+// MaxFilenameLength 文件名最大长度（含扩展名），避免 Windows 260 路径上限与文件系统限制。
+const MaxFilenameLength = 200
+
+// SanitizeRemoteFilename 清洗来自远程（HTTP 头 / URL / BT 元数据 / FTP）的文件名，
+// 防御路径穿越（../、绝对路径、分隔符）、控制字符、Windows 保留名与超长文件名。
+// 返回可直接用于 filepath.Join 的安全文件名。
+func SanitizeRemoteFilename(name string) string {
+	// 1. 先用 Base 剥离任何目录前缀（含 ../）
+	name = filepath.Base(name)
+	// 2. 过滤 Windows / 类 Unix 非法与危险字符
+	replacer := strings.NewReplacer(
+		"/", "_", "\\", "_", "..", "_",
+		"<", "_", ">", "_", ":", "_", "\"", "_",
+		"|", "_", "?", "_", "*", "_", "\x00", "_",
+	)
+	name = replacer.Replace(name)
+	// 3. 去除控制字符（0x00-0x1F、0x7F）
+	name = removeControlChars(name)
+	// 4. 去除首尾空白与多余点
+	name = strings.TrimSpace(name)
+	name = strings.Trim(name, ".")
+	// 5. Windows 保留名（CON/PRN/AUX/NUL/COM1-9/LPT1-9）
+	name = sanitizeReservedName(name)
+	// 6. 长度截断（保留扩展名）
+	if len(name) > MaxFilenameLength {
+		ext := filepath.Ext(name)
+		keep := MaxFilenameLength - len(ext)
+		if keep < 1 {
+			keep = MaxFilenameLength
+			ext = ""
+		}
+		// 按字节截断可能切断多字节 UTF-8 字符（中文/emoji 文件名），
+		// 导致 Linux 落盘非法字节、Windows 转 UTF-16 时乱码；
+		// 从截断点向前回退到完整字符边界，保证始终是合法 UTF-8。
+		cut := keep
+		for cut > 0 && !utf8.RuneStart(name[cut]) {
+			cut--
+		}
+		name = name[:cut] + ext
+	}
+	// 7. 兜底
+	if name == "" || name == "." {
+		name = "download"
+	}
+	return name
+}
+
+// removeControlChars 移除字符串中的控制字符。
+func removeControlChars(s string) string {
+	var b strings.Builder
+	b.Grow(len(s))
+	for _, r := range s {
+		if r < 0x20 || r == 0x7f {
+			continue
+		}
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+// sanitizeReservedName 为 Windows 保留名添加前缀，避免写入被拒绝或覆盖设备文件。
+func sanitizeReservedName(name string) string {
+	ext := filepath.Ext(name)
+	base := strings.TrimSuffix(name, ext)
+	upper := strings.ToUpper(base)
+	for _, r := range []string{"CON", "PRN", "AUX", "NUL"} {
+		if upper == r {
+			return "_" + name
+		}
+	}
+	for i := 1; i <= 9; i++ {
+		if upper == fmt.Sprintf("COM%d", i) || upper == fmt.Sprintf("LPT%d", i) {
+			return "_" + name
+		}
+	}
+	return name
+}
+
+// IsSafePathComponent 判断一个（目录/文件）名是否可作为安全的路径分量，
+// 用于拒绝 BT 种子等外部可控名称中的路径穿越。
+// 允许内部出现的正常子目录分隔（如 "a/b"），但禁止 ".."、绝对路径、反斜杠。
+func IsSafePathComponent(name string) bool {
+	if name == "" {
+		return false
+	}
+	if strings.Contains(name, "..") {
+		return false
+	}
+	if strings.ContainsAny(name, "\\") {
+		return false
+	}
+	if filepath.IsAbs(name) {
+		return false
+	}
+	return true
+}
+
+// EnsureWithinDir 判断 fullPath 是否位于 baseDir 之内（防目录逃逸）。
+func EnsureWithinDir(baseDir, fullPath string) bool {
+	absBase, err := filepath.Abs(baseDir)
+	if err != nil {
+		return false
+	}
+	absPath, err := filepath.Abs(fullPath)
+	if err != nil {
+		return false
+	}
+	rel, err := filepath.Rel(absBase, absPath)
+	if err != nil {
+		return false
+	}
+	return rel != ".." && rel != "." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+}
+
+// SafeJoinFile 先清洗文件名再拼接，并校验结果仍在 baseDir 内。
+func SafeJoinFile(baseDir, name string) (string, error) {
+	clean := SanitizeRemoteFilename(name)
+	joined := filepath.Join(baseDir, clean)
+	if !EnsureWithinDir(baseDir, joined) {
+		return "", fmt.Errorf("非法的文件路径: %s", name)
+	}
+	return joined, nil
+}
+
+// isPublicIP 判断 IP 是否为公网地址（拒绝回环/私网/链路本地/未指定/组播等）。
+func isPublicIP(ip net.IP) bool {
+	if ip == nil {
+		return false
+	}
+	if ip.IsLoopback() || ip.IsPrivate() || ip.IsLinkLocalUnicast() ||
+		ip.IsLinkLocalMulticast() || ip.IsUnspecified() || ip.IsMulticast() {
+		return false
+	}
+	return true
+}
+
+// ValidateRemoteDownloadURL 校验远程下载 URL，防止 SSRF。
+// 仅允许 http/https/ftp/magnet 协议；对 http/https/ftp 解析目标主机，
+// 拒绝任何解析到内网/回环/链路本地/未指定地址的 IP。
+func ValidateRemoteDownloadURL(rawURL string) error {
+	u, err := url.Parse(rawURL)
+	if err != nil {
+		return fmt.Errorf("URL 解析失败: %w", err)
+	}
+	switch strings.ToLower(u.Scheme) {
+	case "http", "https", "ftp":
+		// 需要校验主机
+	case "magnet":
+		return nil // 磁力链接走 P2P/DHT，无直接主机连接
+	default:
+		return fmt.Errorf("不支持的协议: %s", u.Scheme)
+	}
+
+	host := u.Hostname()
+	if host == "" {
+		return fmt.Errorf("缺少主机名")
+	}
+	// 若已是 IP 字面量，直接校验
+	if ip := net.ParseIP(host); ip != nil {
+		if !isPublicIP(ip) {
+			return fmt.Errorf("目标地址为内网/保留地址，已拒绝: %s", ip)
+		}
+		return nil
+	}
+	// 域名：解析后逐个校验（fail-closed）
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return fmt.Errorf("无法解析主机: %w", err)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("主机无可用 IP: %s", host)
+	}
+	for _, ip := range ips {
+		if !isPublicIP(ip) {
+			return fmt.Errorf("主机 %s 解析到内网/保留地址 %s，已拒绝", host, ip)
+		}
+	}
+	return nil
+}
+
+// SafeDialContext 防 SSRF 的拨号函数：每次连接前重新解析主机并校验 IP 非内网/保留地址，
+// 可防御重定向绕过与 DNS rebinding（每次 dial 都重新解析并校验真实 IP）。
+func SafeDialContext(ctx context.Context, network, addr string) (net.Conn, error) {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return nil, err
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		if !isPublicIP(ip) {
+			return nil, fmt.Errorf("拒绝连接到内网/保留地址: %s", ip)
+		}
+		return (&net.Dialer{Timeout: 30 * time.Second}).DialContext(ctx, network, addr)
+	}
+	ips, err := net.LookupIP(host)
+	if err != nil {
+		return nil, err
+	}
+	for _, ip := range ips {
+		if !isPublicIP(ip) {
+			return nil, fmt.Errorf("拒绝连接到内网/保留地址: %s", ip)
+		}
+	}
+	return (&net.Dialer{Timeout: 30 * time.Second}).DialContext(ctx, network, addr)
 }

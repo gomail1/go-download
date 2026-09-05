@@ -2,14 +2,17 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
 
+	"go-download-server/config"
 	"go-download-server/utils"
 )
 
@@ -83,6 +86,49 @@ func cleanupOldHeatmapData() {
 	}
 }
 
+// compressHeatmapDownloadPoints 压缩存量热力图 download 点：
+// 旧版本每个 Range 分片传输都会追加一个 download 点（与下载计数同源的分片重复 bug），
+// 使热力图近 7 天「下载」柱/热度虚高。按与实时计数一致的口径——同 (IP, 文件) 滑动 60s 窗口内的
+// 后续分片点压缩为单点，share 等其他类型不受影响。
+// 幂等：压缩后同 (IP,文件) 相邻点间隔必然 >60s，再次执行不会重复删除。启动加载数据后自动执行一次。
+func compressHeatmapDownloadPoints() {
+	type hk struct{ ip, path string }
+	last := make(map[hk]time.Time)
+	out := make([]HeatmapPoint, 0, len(statsData.HeatmapData))
+	removed := 0
+
+	// HeatmapData 若按原始顺序做滑动窗口，历史跨进程/多份写入可能造成时间乱序，
+	// 把更早的真实窗口点误判为「窗口内」删除。先做时间稳定排序，
+	// 使压缩窗口语义与实时 markLogicalDownload（按时间顺序滑动）完全一致。
+	statsMutex.Lock()
+	sort.SliceStable(statsData.HeatmapData, func(i, j int) bool {
+		return statsData.HeatmapData[i].Timestamp.Before(statsData.HeatmapData[j].Timestamp)
+	})
+	for _, p := range statsData.HeatmapData {
+		if p.Type != "download" {
+			out = append(out, p)
+			continue
+		}
+		k := hk{p.IP, p.Path}
+		ts := p.Timestamp
+		if lastT, ok := last[k]; ok && ts.Sub(lastT) <= downloadMergeWindow {
+			removed++ // 窗口内同 (IP,文件) 的后续分片点 → 丢弃，只保留首个
+			continue
+		}
+		last[k] = ts
+		out = append(out, p)
+	}
+	if removed > 0 {
+		statsData.HeatmapData = out
+	}
+	statsMutex.Unlock()
+
+	if removed > 0 {
+		saveStatsData()
+		log.Printf("压缩了 %d 条重复热力图 download 点(60s 合并口径)，剩余 %d 条", removed, len(out))
+	}
+}
+
 // DeleteStatsForPath 删除指定路径的统计数据
 // 当文件或目录被删除时调用，避免统计数据中积累大量已删除文件的信息
 func DeleteStatsForPath(path string) {
@@ -125,6 +171,7 @@ func startPeriodicTasks() {
 		case <-cleanupTicker.C:
 			MergeDuplicateStats()
 			cleanupOldHeatmapData()
+			cleanupLogicalDownloads()
 		case <-saveTicker.C:
 			// 检查是否需要保存
 			statsMutex.Lock()
@@ -136,6 +183,9 @@ func startPeriodicTasks() {
 			} else {
 				statsMutex.Unlock()
 			}
+
+			// IP 下载统计兜底落盘(有变更时保存,防止崩溃/强杀丢失最近的下载与封禁记录)
+			PeriodicSaveIPStats()
 		}
 	}
 }
@@ -269,6 +319,9 @@ func loadStatsData() {
 	// 这会导致死锁。所以我们需要先释放锁，然后再调用MergeDuplicateStats
 	statsMutex.Unlock()
 	MergeDuplicateStats()
+	// 存量热力点压缩：修复前每个 Range 分片都追加 download 点的重复虚高(与下载计数同源 bug)。
+	// 幂等压缩，仅压缩 download 类型，share 等不受影响。
+	compressHeatmapDownloadPoints()
 	statsMutex.Lock()
 }
 
@@ -320,11 +373,56 @@ func IncrementShareCount(path string, ip string) {
 	needsSave = true
 }
 
-// IncrementDownloadCount 增加文件下载次数和带宽统计
-func IncrementDownloadCount(path string, ip string, fileSize int64) {
+// downloadMergeWindow 同一 (IP, 文件) 传输的合并窗口：窗口内的多次传输视为同一次「逻辑下载」。
+// 多线程工具（IDM/迅雷等）会并发发出多个 Range 分片请求（间隔毫秒~秒级），断点续传也可能分多段完成；
+// 若按 HTTP 请求计数，一次完整下载会被记成 N 次。窗口内只计 1 次下载次数，
+// 流量仍按每段实际传输字节累加（不受影响）。暂停较久（超过窗口）后恢复的续传视为新的下载。
+const downloadMergeWindow = 60 * time.Second
+
+// logicalDownloadTracker 记录各 (IP, 文件) 最近一次传输时间，用于合并窗口判定。
+var (
+	logicalDownloadMu      sync.Mutex
+	logicalDownloadTracker = make(map[string]time.Time)
+)
+
+// markLogicalDownload 登记一次传输。返回 true 表示开启了一次新的逻辑下载（下载次数应 +1）；
+// false 表示属于窗口内同一逻辑下载的后续分片（不再重复计次数，但字节数仍累计）。
+func markLogicalDownload(ip, normalizedPath string) bool {
+	logicalDownloadMu.Lock()
+	defer logicalDownloadMu.Unlock()
+
+	key := ip + "\x00" + normalizedPath
+	now := time.Now()
+	if last, ok := logicalDownloadTracker[key]; ok && now.Sub(last) <= downloadMergeWindow {
+		// 同一逻辑下载的后续分片：刷新最后活动时间，不计新次数
+		logicalDownloadTracker[key] = now
+		return false
+	}
+	logicalDownloadTracker[key] = now
+	return true
+}
+
+// cleanupLogicalDownloads 清理已过期的下载会话记录，防止 map 无限增长。
+// 由 startPeriodicTasks 的清理任务周期调用。
+func cleanupLogicalDownloads() {
+	logicalDownloadMu.Lock()
+	defer logicalDownloadMu.Unlock()
+	threshold := time.Now().Add(-downloadMergeWindow * 2)
+	for key, last := range logicalDownloadTracker {
+		if last.Before(threshold) {
+			delete(logicalDownloadTracker, key)
+		}
+	}
+}
+
+// IncrementDownloadCount 增加文件下载次数和带宽统计。
+//
+// 返回值：true 表示本次传输开启了一次新的逻辑下载（DownloadCount 已 +1）；
+// false 表示属于同一逻辑下载的后续分片（仅累计带宽，不再重复计次数）。
+func IncrementDownloadCount(path string, ip string, fileSize int64) bool {
 	// 参数验证
 	if path == "" {
-		return
+		return false
 	}
 	if fileSize < 0 {
 		fileSize = 0
@@ -339,6 +437,10 @@ func IncrementDownloadCount(path string, ip string, fileSize int64) {
 	cleanPath = strings.TrimPrefix(cleanPath, ".\\")
 	// 标准化路径分隔符
 	normalizedPath := utils.NormalizePath(cleanPath)
+
+	// 合并窗口判定：同一 (IP,文件) 的后续分片不再重复计次数
+	isNew := markLogicalDownload(ip, normalizedPath)
+
 	statsMutex.Lock()
 	defer statsMutex.Unlock()
 
@@ -361,23 +463,27 @@ func IncrementDownloadCount(path string, ip string, fileSize int64) {
 		}
 	}
 
-	// 增加下载次数和更新带宽统计
-	stats.DownloadCount++
+	// 增加下载次数（仅新的逻辑下载）和更新带宽统计（每次传输都累计实际字节）
+	if isNew {
+		stats.DownloadCount++
+		// 添加热力图数据点：仅新的逻辑下载记一点。
+		// 旧版本每个 Range 分片都会追加一点，导致热力图近 7 天下载热度虚高(与下载计数同源的分片重复 bug)。
+		// 同 60s 合并窗口内的分片不再重复加点，使热力图口径与 IP 统计/审计日志一致。
+		statsData.HeatmapData = append(statsData.HeatmapData, HeatmapPoint{
+			Type:      "download",
+			Path:      normalizedPath,
+			Timestamp: time.Now(),
+			IP:        ip,
+			FileSize:  fileSize,
+		})
+	}
 	stats.LastDownloadTime = time.Now()
 	stats.TotalBandwidth += fileSize
 
-	// 添加热力图数据点
-	heatmapPoint := HeatmapPoint{
-		Type:      "download",
-		Path:      normalizedPath,
-		Timestamp: time.Now(),
-		IP:        ip,
-		FileSize:  fileSize,
-	}
-	statsData.HeatmapData = append(statsData.HeatmapData, heatmapPoint)
-
 	// 设置需要保存的标志位
 	needsSave = true
+
+	return isNew
 }
 
 // GetFileStats 获取文件统计信息
@@ -763,4 +869,158 @@ func StatsHandler(w http.ResponseWriter, r *http.Request) {
 	// 发送响应
 	w.WriteHeader(http.StatusOK)
 	w.Write(jsonData)
+}
+
+// ---------- 文件统计(stats.json)历史日志重建(修复分片重复计数污染) ----------
+
+// tempFileStats 日志回填过程用的临时聚合结构(文件维度)
+type tempFileStats struct {
+	count     int64          // 逻辑下载次数(按 (IP+文件) 60s 合并窗口折算)
+	bandwidth int64          // 带宽全额(每次传输逐字节累加,与实时一致)
+	lastDl    time.Time      // 该文件最后一次下载时间
+	points    []HeatmapPoint // 每次逻辑下载对应的热力点(窗口内首个传输)
+}
+
+// collectFileStatsFromLogs 扫描全部历史审计日志(server_*.log 与 .gz),
+// 按 (IP+文件) 60s 合并窗口折算每个文件的「逻辑下载」次数与带宽(与实时计数同口径)。
+// 每次逻辑下载在窗口内首个传输时刻生成一个 download 热力点,供 stats.json 重建。
+// 仅扫描不落盘,由调用方决定合并进现有数据还是整体重建。
+func collectFileStatsFromLogs() map[string]*tempFileStats {
+	logDir := config.AppConfig.Server.LogDir
+	var files []string
+	if plain, err := filepath.Glob(filepath.Join(logDir, "server_*.log")); err == nil {
+		files = append(files, plain...)
+	}
+	if gz, err := filepath.Glob(filepath.Join(logDir, "server_*.log.gz")); err == nil {
+		files = append(files, gz...)
+	}
+	sort.Strings(files)
+
+	tracker := make(map[string]time.Time) // key = ip\x00文件 → 该窗口内最近一次传输时间
+	result := make(map[string]*tempFileStats)
+
+	for _, file := range files {
+		lines, err := readLogLines(file)
+		if err != nil {
+			continue
+		}
+		for _, line := range lines {
+			rec, ok := parseDownloadLogLine(line)
+			if !ok {
+				continue
+			}
+			// 日志行没有文件名时无法归集到文件统计(旧版少数行缺字段),跳过
+			if rec.file == "" {
+				continue
+			}
+
+			key := rec.ip + "\x00" + rec.file
+			isNew := true
+			if last, exists := tracker[key]; exists && rec.ts.Sub(last) <= downloadMergeWindow {
+				isNew = false
+			}
+			tracker[key] = rec.ts // 滑动窗口:每次传输都刷新最近时间
+
+			fs, exists := result[rec.file]
+			if !exists {
+				fs = &tempFileStats{lastDl: rec.ts}
+				result[rec.file] = fs
+			}
+			if isNew {
+				fs.count++
+				fs.points = append(fs.points, HeatmapPoint{
+					Type:      "download",
+					Path:      rec.file,
+					Timestamp: rec.ts,
+					IP:        rec.ip,
+					FileSize:  rec.size,
+				})
+			}
+			fs.bandwidth += rec.size
+			if rec.ts.After(fs.lastDl) {
+				fs.lastDl = rec.ts
+			}
+		}
+	}
+	return result
+}
+
+// RebuildFileStatsFromLogs 从历史日志强制重建文件下载统计(stats.json),用于修复
+// 旧版「每个 Range 分片传输都 +1 下载次数 / 热力点 + 累加整文件大小」污染的存量数据。
+//
+// 策略(与 RebuildIPStatsFromLogs 对称):
+//  1. 备份现有 stats.json 为 stats.json.bak.<时间戳>;
+//  2. 分享统计(ShareCount/LastShareTime)与上传时间(UploadTime)与分片 bug 无关,保留原值;
+//  3. download_count / total_bandwidth / last_download_time / download 热力点
+//     全部按日志 60s 合并口径重建(带宽按每片实际传输字节累加,不重复);
+//  4. 日志未覆盖的条目(可能仅被分享过)保留 download_count=0,避免把分享文件误删。
+//
+// 幂等:重建后再执行结果不变。可重复执行(每次都会先备份)。
+func RebuildFileStatsFromLogs() (backupPath string, err error) {
+	// 备份现有 stats.json(存在才备份)
+	if _, statErr := os.Stat(statsDataFile); statErr == nil {
+		backupPath = filepath.Join(filepath.Dir(statsDataFile), "stats.json.bak."+time.Now().Format("20060102_150405"))
+		data, readErr := os.ReadFile(statsDataFile)
+		if readErr != nil {
+			return "", fmt.Errorf("读取原统计数据失败: %v", readErr)
+		}
+		if writeErr := os.WriteFile(backupPath, data, 0644); writeErr != nil {
+			return "", fmt.Errorf("备份原统计数据失败: %v", writeErr)
+		}
+		fmt.Printf("[统计] 已备份原统计数据: %s\n", backupPath)
+	}
+
+	collected := collectFileStatsFromLogs()
+
+	statsMutex.Lock()
+	// 分享/上传元数据与分片 bug 无关,从现有条目快照保留
+	// 日志未覆盖的条目(可能仅被分享过/超保留期):download 相关清零,分享字段保留,避免误删文件
+	for path := range statsData.FileStatsMap {
+		if _, exists := collected[path]; exists {
+			continue
+		}
+		collected[path] = &tempFileStats{count: 0, bandwidth: 0}
+	}
+
+	// 重建 FileStatsMap
+	newMap := make(map[string]*FileStats, len(collected))
+	for path, tmp := range collected {
+		old := statsData.FileStatsMap[path]
+		fs := &FileStats{
+			Path:           path,
+			DownloadCount:  tmp.count,
+			TotalBandwidth: tmp.bandwidth,
+		}
+		if old != nil {
+			fs.ShareCount = old.ShareCount
+			fs.LastShareTime = old.LastShareTime
+			fs.UploadTime = old.UploadTime
+		}
+		if tmp.lastDl.IsZero() {
+			fs.LastDownloadTime = time.Now()
+		} else {
+			fs.LastDownloadTime = tmp.lastDl
+		}
+		newMap[path] = fs
+	}
+	statsData.FileStatsMap = newMap
+
+	// 重建热力图 download 点:share/upload/admin_action 等其他类型点不受分片 bug 影响,保留
+	var kept []HeatmapPoint
+	for _, p := range statsData.HeatmapData {
+		if p.Type != "download" {
+			kept = append(kept, p)
+		}
+	}
+	for _, tmp := range collected {
+		kept = append(kept, tmp.points...)
+	}
+	// 时间升序,便于前端按时间区间取数
+	sort.SliceStable(kept, func(i, j int) bool { return kept[i].Timestamp.Before(kept[j].Timestamp) })
+	statsData.HeatmapData = kept
+	statsMutex.Unlock()
+
+	saveStatsData()
+	fmt.Printf("[统计] 文件统计重建完成: %d 个文件的下载次数/带宽/热力点已按日志 60s 口径重建\n", len(collected))
+	return backupPath, nil
 }

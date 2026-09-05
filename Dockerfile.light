@@ -35,8 +35,11 @@ COPY go-download-server ./
 # 复制static目录内容
 COPY static ./static
 
-# 注意：所有运行时目录（config, downloads, pending, logs, ssl, data, config/icons/cache）
+# 注意：所有运行时目录（config, downloads, pending, logs, ssl, config/tasks, config/icons/cache）
 # 都会由代码自动创建（os.MkdirAll），无需在这里创建
+# 声明数据卷，确保配置、下载文件、任务记录等数据持久化
+# 注意：下载任务记录和进度数据存储在 /app/config/tasks 下，已包含在 config 挂载中
+VOLUME ["/app/config", "/app/downloads", "/app/pending", "/app/logs", "/app/ssl"]
 
 # 设置环境变量
 ENV TZ=Asia/Shanghai

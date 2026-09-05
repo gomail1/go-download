@@ -44,8 +44,8 @@ func (pm *PersistenceManager) SaveTask(task *Task) error {
 		return err
 	}
 
-	// Write to file
-	return os.WriteFile(taskPath, data, 0644)
+	// 原子写：先写临时文件再 rename，避免崩溃时损坏原任务文件
+	return atomicWriteFile(taskPath, data)
 }
 
 // LoadTask loads a task from disk
@@ -149,8 +149,23 @@ func (pm *PersistenceManager) SaveProgress(taskID string, progress *Progress) er
 		return err
 	}
 
-	// Write to file
-	return os.WriteFile(progressPath, data, 0644)
+	// 原子写：先写临时文件再 rename，避免崩溃时损坏原进度文件
+	return atomicWriteFile(progressPath, data)
+}
+
+// atomicWriteFile 原子写文件：先写 .tmp 临时文件并落盘，再 rename 覆盖目标文件，
+// 避免写入过程中崩溃导致原文件半截损坏、LoadAllTasks 解析失败而静默丢失任务。
+func atomicWriteFile(path string, data []byte) error {
+	tmpPath := path + ".tmp"
+	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
+		return err
+	}
+	// 确保数据落盘后再 rename（rename 在同一目录下是原子操作）
+	if f, err := os.OpenFile(tmpPath, os.O_RDWR, 0644); err == nil {
+		_ = f.Sync()
+		_ = f.Close()
+	}
+	return os.Rename(tmpPath, path)
 }
 
 // LoadProgress loads task progress from disk

@@ -403,15 +403,15 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 		<table class="data-table-v2" style="width: 100%; table-layout: fixed; border-collapse: collapse;">
 		<thead>
 			<tr>
-				<th style="width: 20%; padding: 12px 10px; text-align: left; white-space: nowrap;">文件名</th>
-				<th style="width: 24%; padding: 12px 10px; text-align: left; white-space: nowrap;">下载链接</th>
-				<th style="width: 6%; padding: 12px 10px; text-align: center; white-space: nowrap;">协议</th>
-				<th style="width: 9%; padding: 12px 10px; text-align: center; white-space: nowrap;">状态</th>
-				<th style="width: 6%; padding: 12px 10px; text-align: center; white-space: nowrap;">进度</th>
+				<th style="width: 26%; padding: 12px 10px; text-align: left; white-space: nowrap; overflow: hidden;">文件名</th>
+				<th style="width: 28%; padding: 12px 10px; text-align: left; white-space: nowrap; overflow: hidden;">下载链接</th>
+				<th style="width: 5%; padding: 12px 10px; text-align: center; white-space: nowrap;">协议</th>
+				<th style="width: 7%; padding: 12px 10px; text-align: center; white-space: nowrap;">状态</th>
+				<th style="width: 5%; padding: 12px 10px; text-align: center; white-space: nowrap;">进度</th>
 				<th style="width: 7%; padding: 12px 10px; text-align: center; white-space: nowrap;">速度</th>
-				<th style="width: 6%; padding: 12px 10px; text-align: center; white-space: nowrap;">节点</th>
-				<th style="width: 10%; padding: 12px 10px; text-align: center; white-space: nowrap;">创建时间</th>
-				<th style="width: 12%; padding: 12px 10px; text-align: center; white-space: nowrap;">操作</th>
+				<th style="width: 5%; padding: 12px 10px; text-align: center; white-space: nowrap;">节点</th>
+				<th style="width: 9%; padding: 12px 10px; text-align: center; white-space: nowrap;">创建时间</th>
+				<th style="width: 8%; padding: 12px 10px; text-align: center; white-space: nowrap;">操作</th>
 			</tr>
 		</thead>
 		<tbody>`
@@ -446,14 +446,14 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 			}
 			// 文件名过长截断
 			displayName := filename
-			if len(displayName) > 40 {
-				displayName = displayName[:40] + "..."
+			if len(displayName) > 30 {
+				displayName = displayName[:30] + "..."
 			}
 
 			// 格式化URL，只显示前50个字符
 			displayURL := task.URL
-			if len(displayURL) > 50 {
-				displayURL = displayURL[:50] + "..."
+			if len(displayURL) > 35 {
+				displayURL = displayURL[:35] + "..."
 			}
 
 			// 格式化进度
@@ -855,10 +855,16 @@ func DownloadTasksHandler(w http.ResponseWriter, r *http.Request) {
 						// 获取文件名（从metadata中获取，若不存在则使用任务ID）
 					const filename = (task.metadata && task.metadata.filename) ? task.metadata.filename : (task.id || '');
 					
+					// 文件名过长截断（避免长文件名换行重叠）
+					let displayFilename = filename;
+					if (filename && filename.length > 35) {
+						displayFilename = filename.substring(0, 35) + '...';
+					}
+					
 					// 创建表格行
 					const row = document.createElement('tr');
-					row.innerHTML = '<td title="' + (task.id || '') + '">' + filename + '</td>' +
-							'<td title="' + (task.url || '') + '">' + (displayURL || '') + '</td>' +
+					row.innerHTML = '<td style="padding: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.4;" title="' + filename.replace(/"/g, '&quot;') + '">' + displayFilename + '</td>' +
+							'<td style="padding: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; line-height: 1.4; font-size: 12px; color: var(--v2-text-muted);" title="' + (task.url || '').replace(/"/g, '&quot;') + '">' + (displayURL || '') + '</td>' +
 							'<td style="text-align: center;">' + displayProtocol + '</td>' +
 							'<td style="text-align: center;"><span class="status ' + statusClass + '">' + displayStatus + '</span></td>' +
 							'<td style="text-align: center;">' + progress + '</td>' +

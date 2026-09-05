@@ -2,10 +2,14 @@ package api
 
 import (
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 	"go-download-server/internal/core"
 	"go-download-server/internal/logger"
+	"go-download-server/utils"
 )
 
 // GetTasks handles GET /api/tasks
@@ -49,7 +53,7 @@ func (s *Server) PauseTask(c *gin.Context) {
 	id := c.Param("id")
 	err := s.coreEngine.PauseTask(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(apiErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 
@@ -61,7 +65,7 @@ func (s *Server) ResumeTask(c *gin.Context) {
 	id := c.Param("id")
 	err := s.coreEngine.ResumeTask(c.Request.Context(), id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(apiErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 
@@ -73,18 +77,41 @@ func (s *Server) DeleteTask(c *gin.Context) {
 	id := c.Param("id")
 	err := s.coreEngine.RemoveTask(id)
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, gin.H{"error": err.Error()})
+		c.JSON(apiErrorStatus(err), gin.H{"error": err.Error()})
 		return
 	}
 
 	c.JSON(http.StatusOK, gin.H{"message": "Task deleted successfully"})
 }
 
-// GetStatistics handles GET /api/stats
-func (s *Server) GetStatistics(c *gin.Context) {
-	stats := s.coreEngine.GetStatistics()
-	c.JSON(http.StatusOK, stats)
+// apiErrorStatus 将引擎错误映射为合适的 HTTP 状态码：
+// 任务不存在 -> 404，状态冲突（如非下载中暂停）-> 409，其余 -> 500。
+func apiErrorStatus(err error) int {
+	if err == nil {
+		return http.StatusOK
+	}
+	msg := err.Error()
+	switch {
+	case strings.Contains(msg, "not found"):
+		return http.StatusNotFound
+	case strings.Contains(msg, "not downloading"), strings.Contains(msg, "not paused"),
+		strings.Contains(msg, "already"):
+		return http.StatusConflict
+	default:
+		return http.StatusInternalServerError
+	}
 }
+
+// GetStatistics handles GET /api/stats
+//
+// 已废弃：此路由被 main.go 的 net/http /api/stats（handlers.StatsHandler）
+// 精确注册抢占，从未生效。真实统计接口见 handlers.StatsHandler。
+// 删除路由时保留方法本身（coreEngine.GetStatistics 属引擎能力，可后续
+// 在无冲突路径上重新挂载，如 /api/tasks/statistics 需避免与 /tasks/:id 段冲突）。
+// func (s *Server) GetStatistics(c *gin.Context) {
+// 	stats := s.coreEngine.GetStatistics()
+// 	c.JSON(http.StatusOK, stats)
+// }
 
 // UploadTorrentFile handles POST /api/tasks/upload
 func (s *Server) UploadTorrentFile(c *gin.Context) {
@@ -104,11 +131,18 @@ func (s *Server) UploadTorrentFile(c *gin.Context) {
 
 	// Process all files
 	var results []*core.Task
+	// 集中存放上传的种子文件，避免路径遍历且便于管理
+	torrentDir := filepath.Join("tmp", "torrents")
+	if err := os.MkdirAll(torrentDir, 0755); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create torrent temp dir"})
+		return
+	}
 	for _, file := range files {
-		// Save the file to a temporary location
-		tmpPath := "./tmp/" + file.Filename
+		// 清洗文件名，杜绝 ../ 等目录穿越与非法字符
+		safeName := utils.SanitizeRemoteFilename(file.Filename)
+		tmpPath := filepath.Join(torrentDir, safeName)
 		if err := c.SaveUploadedFile(file, tmpPath); err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save torrent file: " + file.Filename})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to save torrent file: " + safeName})
 			return
 		}
 
@@ -120,7 +154,7 @@ func (s *Server) UploadTorrentFile(c *gin.Context) {
 		task, err := s.coreEngine.AddTask(c.Request.Context(), req)
 		if err != nil {
 			logger.Errorf("创建任务失败: %v", err)
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create task for file " + file.Filename + ": " + err.Error()})
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create task for file " + safeName + ": " + err.Error()})
 			return
 		}
 
