@@ -3,7 +3,10 @@
 使用Go语言开发的高性能文件下载站，提供文件上传、下载、浏览、审核和管理功能，支持基于角色的用户权限控制、全平台响应式设计、多协议下载功能，以及完善的安全防护和监控告警系统。
 
 **GitHub仓库链接**: [https://github.com/gomail1/go-download](https://github.com/gomail1/go-download)
+
 **Docker仓库链接**: [https://hub.docker.com/r/gomail1/go_downloader](https://hub.docker.com/r/gomail1/go_downloader)
+
+**项目演示地址**: https://go.dansg.xyz/
 
 ## 📸 操作演示
 
