@@ -38,8 +38,7 @@ config/ip_stats.json
 config/icons/
 config/trackers_cache.txt
 
-# 任务目录（运行时生成）
-tasks/
+# 任务目录（运行时生成，真实路径为 config/tasks，由 docker volume 挂载）
 config/tasks/
 
 # 日志文件
@@ -85,4 +84,6 @@ build/
 
 # 文档和演示文件
 *.md
+# 例外：第三方许可声明需随镜像分发（COPY 进 /app/）
+!THIRD_PARTY_NOTICES.md
 操作演示/

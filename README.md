@@ -994,7 +994,11 @@ go test ./handlers/...
 
 ## 📄 许可证
 
-本项目采用 MIT 许可证，详见 LICENSE 文件。
+本项目采用 MIT 许可证，详见 [LICENSE](LICENSE) 文件。
+
+### 第三方组件许可声明
+
+本项目依赖的全部第三方开源组件（共 144 个 Go 模块 + 静态资源 Chart.js）清单与版权声明见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)，各许可证全文归档于 [`licenses/`](licenses/) 目录。Docker 镜像内已随附该声明（`/app/THIRD_PARTY_NOTICES.md` 与 `/app/licenses/`），满足对外分发保留版权与许可声明的合规要求。
 
 ## 📞 联系方式
 

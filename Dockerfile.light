@@ -35,6 +35,10 @@ COPY go-download-server ./
 # 复制static目录内容
 COPY static ./static
 
+# 复制第三方许可声明与许可证全文（合规：随发行物保留依赖版权与许可）
+COPY THIRD_PARTY_NOTICES.md ./
+COPY licenses ./licenses
+
 # 注意：所有运行时目录（config, downloads, pending, logs, ssl, config/tasks, config/icons/cache）
 # 都会由代码自动创建（os.MkdirAll），无需在这里创建
 # 声明数据卷，确保配置、下载文件、任务记录等数据持久化
